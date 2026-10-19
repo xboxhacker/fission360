@@ -2,6 +2,7 @@
 // Copyright (C) FissionCAD contributors
 #pragma once
 #include <QObject>
+#include <QEvent>
 #include <atomic>
 #include <QString>
 #include <QTimer>
@@ -102,6 +103,9 @@ signals:
     // Slicer search: each match as {slicer, path, modified}; finished once with the full list
     void slicerSearchProgress(const QString &where);
     void slicerSearchFinished(const QVariantList &results, bool cancelled);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     std::atomic<bool> m_slicerSearchCancel{false};

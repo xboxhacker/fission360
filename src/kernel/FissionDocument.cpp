@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <QByteArray>
 #include <QImage>
+#include <Standard_Failure.hxx>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -179,10 +180,25 @@ QString FissionDocument::pathTraceToFile(const QString &path, const QVariantMap 
 
     if (auto *app = FissionApplication::instance())
         app->beginTask(QStringLiteral("path-trace"), QStringLiteral("Path tracing…"));
-    QImage img = PathTracer::render(this, cam, s, [](double p) {
+    QImage img;
+    try {
+        img = PathTracer::render(this, cam, s, [](double p) {
+            if (auto *app = FissionApplication::instance())
+                app->reportProgress(QStringLiteral("path-trace"), p, QStringLiteral("Path tracing…"));
+            // Keep the UI alive during long CPU traces (and drain queued progress updates)
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        });
+    } catch (const Standard_Failure &e) {
         if (auto *app = FissionApplication::instance())
-            app->reportProgress(QStringLiteral("path-trace"), p, QStringLiteral("Path tracing…"));
-    });
+            app->endTask(QStringLiteral("path-trace"));
+        m_lastError = QStringLiteral("Path tracer failed: %1").arg(QString::fromUtf8(e.GetMessageString()));
+        return {};
+    } catch (...) {
+        if (auto *app = FissionApplication::instance())
+            app->endTask(QStringLiteral("path-trace"));
+        m_lastError = QStringLiteral("Path tracer failed unexpectedly");
+        return {};
+    }
     if (auto *app = FissionApplication::instance())
         app->endTask(QStringLiteral("path-trace"));
     if (img.isNull()) {

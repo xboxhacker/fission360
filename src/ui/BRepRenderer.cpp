@@ -23,6 +23,7 @@
 #include <QSet>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
 #include <gp_Pln.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -724,11 +725,26 @@ void BRepRenderer::addFace(const TopoDS_Shape &shape, const PickTag &tag, const 
     const TopoDS_Face face = TopoDS::Face(shape);
     TopLoc_Location loc;
     Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
-    if (tri.IsNull()) {
-        BRepMesh_IncrementalMesh(face, deflection, Standard_False, 0.3);
+    // Small faces (chamfers, 45° bevels) often get zero triangles at the body-wide deflection
+    auto remesh = [&](double defl) {
+        try {
+            BRepMesh_IncrementalMesh(face, defl, Standard_False, 0.3);
+        } catch (const Standard_Failure &) {
+            return;
+        }
+        loc = TopLoc_Location();
         tri = BRep_Tool::Triangulation(face, loc);
-        if (tri.IsNull()) return;
+    };
+    if (tri.IsNull() || tri->NbTriangles() < 1) remesh(deflection);
+    if (tri.IsNull() || tri->NbTriangles() < 1) {
+        Bnd_Box fb;
+        BRepBndLib::Add(face, fb);
+        if (!fb.IsVoid()) {
+            const double fdiag = std::max(1e-3, std::sqrt(fb.SquareExtent()));
+            remesh(std::min(deflection, std::max(0.001, fdiag * 0.04)));
+        }
     }
+    if (tri.IsNull() || tri->NbTriangles() < 1) return;
     const gp_Trsf trsf = loc.Transformation();
     TopLoc_Location surfLoc;
     Handle(Geom_Surface) surf = BRep_Tool::Surface(face, surfLoc);

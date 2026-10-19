@@ -16,6 +16,11 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.26 — render crash; face pattern cut; shell pick; Ctrl+Y
+- **Path-trace export**: mesh a private face copy (no live-shape remesh race), guard camera/resolution, catch OCCT failures.
+- **Pattern faces**: select a hole face → Rectangular/Circular pattern **Cuts** more holes into the body (cylinder / extruded-face tools).
+- **Shell**: remesh tiny faces (chamfers / 45° bevels) so they stay pickable.
+- **Ctrl+Y redo**: app-wide C++ event filter (QML Shortcut alone was still missing key events).
 ### 1.13.25 — Ctrl+Y redo; section offset arrow; MFG wiring; requestPaint
 - **Ctrl+Y** (and Ctrl+Shift+Z) redo via `ApplicationShortcut`; status when nothing to redo.
 - **Section Analysis** offset arrow: drag no longer required a command feature (`moveManipDrag` early-return bug).

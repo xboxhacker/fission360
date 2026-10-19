@@ -468,7 +468,16 @@ ApplicationWindow {
             break
         }
         case "Mirror": case "RectangularPattern": case "CircularPattern": {
-            p.bodies = bodyIndices(items.filter(x => x.kind === "body" || x.kind === "face"))
+            const faces = selectedOf("face")
+            const bodiesOnly = selectedOf("body")
+            // Face selection (e.g. a hole wall) → pattern as Cut tools; whole-body selection → copy bodies
+            if (faces.length && !bodiesOnly.length && type !== "Mirror") {
+                p.faces = faces
+                p.bodies = []
+                p.operation = "cut"
+            } else {
+                p.bodies = bodyIndices(items.filter(x => x.kind === "body" || x.kind === "face"))
+            }
             if (type === "Mirror") {
                 const pl = planeRef(selectedOf("plane")[0] || selectedOf("originplane")[0])
                 if (pl) p.plane = pl
@@ -1660,9 +1669,9 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         onActivated: { viewportItem.cancelSketchInput(); win.doc.undo() }
     }
-    // Ctrl+Y is the Windows CAD default; also Ctrl+Shift+Z (macOS / some Qt StandardKey.Redo maps)
+    // Ctrl+Shift+Z redo (Ctrl+Y is also handled in C++ FissionApplication::eventFilter — more reliable)
     Shortcut {
-        sequences: ["Ctrl+Y", "Ctrl+Shift+Z", StandardKey.Redo]
+        sequence: "Ctrl+Shift+Z"
         context: Qt.ApplicationShortcut
         onActivated: {
             viewportItem.cancelSketchInput()

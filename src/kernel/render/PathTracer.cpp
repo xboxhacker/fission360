@@ -10,9 +10,11 @@
 #include <QImage>
 #include <QtMath>
 
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
 #include <Poly_Triangulation.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
@@ -200,11 +202,22 @@ QColor sampleTriplanarGray(const QImage &img, const QVector3D &p, const QVector3
 
 void appendFaceTris(std::vector<Tri> &out, const TopoDS_Face &face, const QColor &col, float rough, float metal,
                     float opacity, const QImage &albedo, const QImage &roughMap, const QImage &metalMap) {
+    // Mesh a private copy — IncrementalMesh on live document faces races the viewport and can crash
+    TopoDS_Face work = face;
+    try {
+        work = TopoDS::Face(BRepBuilderAPI_Copy(face).Shape());
+    } catch (const Standard_Failure &) {
+        work = face;
+    }
     TopLoc_Location loc;
-    Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
-    if (tri.IsNull()) {
-        BRepMesh_IncrementalMesh(face, 0.5, Standard_False, 0.5);
-        tri = BRep_Tool::Triangulation(face, loc);
+    Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(work, loc);
+    if (tri.IsNull() || tri->NbTriangles() < 1) {
+        try {
+            BRepMesh_IncrementalMesh(work, 0.5, Standard_False, 0.5);
+            tri = BRep_Tool::Triangulation(work, loc);
+        } catch (const Standard_Failure &) {
+            return;
+        }
     }
     if (tri.IsNull() || tri->NbTriangles() < 1) return;
     const gp_Trsf tr = loc.Transformation();
@@ -351,11 +364,16 @@ int PathTracer::samplesForQuality(int quality) {
 }
 
 QImage PathTracer::render(FissionDocument *doc, const Camera &cam, const Settings &settings, ProgressFn progress) {
-    const int W = std::max(8, settings.width);
-    const int H = std::max(8, settings.height);
-    const int spp = std::max(1, settings.samplesPerPixel);
+    const int W = std::clamp(settings.width, 8, 4096);
+    const int H = std::clamp(settings.height, 8, 4096);
+    const int spp = std::clamp(settings.samplesPerPixel, 1, 512);
 
-    auto tris = buildScene(doc);
+    std::vector<Tri> tris;
+    try {
+        tris = buildScene(doc);
+    } catch (const Standard_Failure &) {
+        return {};
+    }
     std::vector<int> order(tris.size());
     for (int i = 0; i < int(tris.size()); ++i) order[i] = i;
     std::vector<BvhNode> nodes;
@@ -367,13 +385,23 @@ QImage PathTracer::render(FissionDocument *doc, const Camera &cam, const Setting
     if (!settings.environmentPath.isEmpty() && QFileInfo::exists(settings.environmentPath))
         hdr.load(settings.environmentPath);
 
-    const QVector3D forward = (cam.target - cam.eye).normalized();
-    const QVector3D right = QVector3D::crossProduct(forward, cam.up).normalized();
-    const QVector3D up = QVector3D::crossProduct(right, forward);
+    QVector3D forward = cam.target - cam.eye;
+    if (forward.lengthSquared() < 1e-12f) forward = QVector3D(0, 1, 0);
+    else forward.normalize();
+    QVector3D upHint = cam.up.lengthSquared() > 1e-12f ? cam.up.normalized() : QVector3D(0, 0, 1);
+    QVector3D right = QVector3D::crossProduct(forward, upHint);
+    if (right.lengthSquared() < 1e-12f) {
+        upHint = QVector3D(0, 1, 0);
+        right = QVector3D::crossProduct(forward, upHint);
+    }
+    right.normalize();
+    const QVector3D up = QVector3D::crossProduct(right, forward).normalized();
     const float aspect = float(W) / float(H);
-    const float tanHalf = std::tan(float(cam.fovDeg) * float(M_PI) / 360.f);
+    const float fov = std::clamp(float(cam.fovDeg), 1.f, 170.f);
+    const float tanHalf = std::tan(fov * float(M_PI) / 360.f);
 
     QImage img(W, H, QImage::Format_RGB888);
+    if (img.isNull()) return {};
     img.fill(settings.background);
     std::mt19937 rng(0xF15510);
     std::uniform_real_distribution<float> U(0.f, 1.f);

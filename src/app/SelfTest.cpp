@@ -356,6 +356,34 @@ void testRevolveLoftSweep() {
     }
 }
 
+void testFacePatternCut() {
+    FissionDocument doc;
+    auto *s = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+    s->addRectangle(0, 0, 40, 20);
+    s->addCircle(10, 10, 3);
+    doc.rebuild();
+    extrude(&doc, s, 10);
+    check(doc.bodyCount() == 1 && near(totalVolume(&doc), 40 * 20 * 10 - M_PI * 9 * 10, 2e-3),
+          "face pattern: plate with one hole", status(&doc));
+    int cyl = -1;
+    const auto faces = GeomUtils::faceMap(doc.body(0)->shape());
+    for (int i = 1; i <= faces.Extent(); ++i) {
+        BRepAdaptor_Surface surf(TopoDS::Face(faces(i)));
+        if (surf.GetType() == GeomAbs_Cylinder) { cyl = i - 1; break; }
+    }
+    check(cyl >= 0, "face pattern: found cylindrical hole face");
+    if (cyl < 0) return;
+    auto *pat = doc.addFeature("RectangularPattern", {
+        {"faces", QVariantList{GeomUtils::faceRef(0, doc.body(0)->shape(), cyl)}},
+        {"operation", "cut"},
+        {"direction1", "X"}, {"count1", "3"}, {"spacing1", "10 mm"},
+        {"direction2", ""}, {"count2", "1"}
+    });
+    check(pat && pat->isHealthy() && doc.bodyCount() == 1
+              && near(totalVolume(&doc), 40 * 20 * 10 - 3 * M_PI * 9 * 10, 5e-3),
+          "face pattern: three holes cut into the plate", status(&doc));
+}
+
 void testPatternsAndMirror() {
     FissionDocument doc;
     auto *s = rectSketch(&doc, "XY", 10, 0, 10, 10);
@@ -2753,6 +2781,7 @@ int run() {
     testFilletChamferShell();
     testRevolveLoftSweep();
     testPatternsAndMirror();
+    testFacePatternCut();
     testSketchOnFaceAndFiles();
     testConstraints();
     testLoftFromFace();

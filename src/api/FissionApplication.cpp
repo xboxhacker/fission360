@@ -7,6 +7,9 @@
 #include "kernel/FissionProgress.h"
 #include <QBuffer>
 #include <QDateTime>
+#include <QEvent>
+#include <QGuiApplication>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
@@ -37,11 +40,40 @@ FissionApplication::FissionApplication(QObject *parent) : QObject(parent) {
             if (self) self->updateTask(id, label, fraction, done);
         }, Qt::QueuedConnection);
     });
+    // Ctrl+Y redo — QML Shortcut is unreliable when the viewport / dialogs hold focus
+    if (qApp) qApp->installEventFilter(this);
     m_drawingManager = new DrawingManager(this);
     m_autosaveSec = setting(QStringLiteral("autosave/intervalSec"), 120).toInt();
     connect(&m_autosaveTimer, &QTimer::timeout, this, &FissionApplication::tickAutosave);
     setAutosaveIntervalSec(m_autosaveSec);
     newDocument();
+}
+
+bool FissionApplication::eventFilter(QObject *watched, QEvent *event) {
+    if (event->type() == QEvent::KeyPress) {
+        auto *ke = static_cast<QKeyEvent *>(event);
+        const bool ctrl = ke->modifiers() & Qt::ControlModifier;
+        const bool shift = ke->modifiers() & Qt::ShiftModifier;
+        const bool alt = ke->modifiers() & Qt::AltModifier;
+        const bool meta = ke->modifiers() & Qt::MetaModifier;
+        // Ctrl+Y (no Shift/Alt) — Windows CAD redo. Skip when typing in a text field.
+        if (ctrl && !shift && !alt && !meta && ke->key() == Qt::Key_Y) {
+            const QObject *focus = QGuiApplication::focusObject();
+            const char *cn = focus && focus->metaObject() ? focus->metaObject()->className() : "";
+            const QByteArray name(cn);
+            if (name.contains("TextInput") || name.contains("TextEdit") || name.contains("TextField")
+                || name.contains("SpinBox") || name.contains("ComboBox"))
+                return QObject::eventFilter(watched, event);
+            if (m_document && m_document->canRedo()) {
+                m_document->redo();
+                showMessage(QStringLiteral("Redo"));
+                return true;
+            }
+            showMessage(QStringLiteral("Nothing to redo"));
+            return true;
+        }
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void FissionApplication::setAutosaveIntervalSec(int sec) {
