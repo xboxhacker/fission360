@@ -1038,6 +1038,14 @@ Item {
         if (!manip && manipField.activeFocus) vp.forceActiveFocus()
         manipCanvas.requestPaint()
     }
+    onSectionManipChanged: manipCanvas.requestPaint()
+    Connections {
+        target: app
+        function onSectionOffsetChanged() { vp.manipCanvas.requestPaint() }
+        function onSectionFlipChanged() { vp.manipCanvas.requestPaint() }
+        function onSectionEnabledChanged() { vp.manipCanvas.requestPaint() }
+        function onInspectModeChanged() { vp.manipCanvas.requestPaint() }
+    }
 
     // Screen geometry of the handle: base, tip and a unit screen direction for the arrow head
     function manipScreen() {
@@ -1097,6 +1105,8 @@ Item {
         return ok(hx + 48, hy - bh / 2) || { x: 4, y: 4 }
     }
     function nearManip(x, y) {
+        // Draft: only the angle knob is interactive (the pull arrow is a guide)
+        if (app.commandFeature && app.commandFeature.type === "Draft") return false
         const s = manipScreen()
         return !!s && Math.hypot(x - s.handle[0], y - s.handle[1]) < 14
     }
@@ -1104,6 +1114,46 @@ Item {
         const t = r.axisParameter(x, y, manip.origin, manip.direction)
         if (t === undefined) return false
         manipDrag = { origin: manip.origin, direction: manip.direction, key: manip.key, offset: manip.value - t }
+        return true
+    }
+
+    // Section Analysis offset handle (independent of commandFeature)
+    readonly property var sectionManip: {
+        const a = app
+        if (!a || a.inspectMode !== "section" || !a.sectionEnabled || a.sectionAwaitingPlane) return null
+        const f = a.sectionFrame
+        if (!f || !f.ok) return null
+        let n = Qt.vector3d(f.normal[0], f.normal[1], f.normal[2])
+        if (a.sectionFlip) n = n.times(-1)
+        return {
+            origin: Qt.vector3d(f.origin[0], f.origin[1], f.origin[2]),
+            direction: n,
+            value: a.sectionFlip ? -a.sectionOffset : a.sectionOffset
+        }
+    }
+    function sectionScreen() {
+        const m = sectionManip
+        if (!m) return null
+        const tipW = m.origin.plus(m.direction.times(m.value))
+        const o = r.projectPoint(m.origin), t = r.projectPoint(tipW)
+        const ahead = r.projectPoint(tipW.plus(m.direction.times(r.snapStep() * 4)))
+        if (!o.length || !t.length || !ahead.length) return null
+        let dx = ahead[0] - t[0], dy = ahead[1] - t[1]
+        const len = Math.hypot(dx, dy)
+        if (len < 1e-6) { dx = 0; dy = -1 } else { dx /= len; dy /= len }
+        if (m.value < 0) { dx = -dx; dy = -dy }
+        return { o: o, t: t, d: [dx, dy], handle: [t[0] + dx * 10, t[1] + dy * 10] }
+    }
+    function nearSection(x, y) {
+        const s = sectionScreen()
+        return !!s && Math.hypot(x - s.handle[0], y - s.handle[1]) < 14
+    }
+    function beginSectionDrag(x, y) {
+        const m = sectionManip
+        if (!m) return false
+        const t = r.axisParameter(x, y, m.origin, m.direction)
+        if (t === undefined) return false
+        manipDrag = { section: true, origin: m.origin, direction: m.direction, offset: m.value - t }
         return true
     }
     // ------------------------------------------------------------------ region selection
@@ -1275,6 +1325,15 @@ Item {
         const f = app.commandFeature
         if (!manipDrag || !f) return
         if (manipDrag.move) { moveTo(x, y); return }
+        if (manipDrag.section) {
+            const t = r.axisParameter(x, y, manipDrag.origin, manipDrag.direction)
+            if (t === undefined) return
+            const step = Math.max(0.01, r.snapStep() / 2)
+            let v = Math.round((t + manipDrag.offset) / step) * step
+            app.sectionOffset = app.sectionFlip ? -v : v
+            manipCanvas.requestPaint()
+            return
+        }
         if (manipDrag.angle) {
             const a = manipDrag.angle
             const t = r.axisParameter(x, y, a.pivot.plus(a.up.times(a.height)), a.out)
@@ -1382,6 +1441,7 @@ Item {
             else if (m.button === Qt.LeftButton && vp.app.pointPick) mode = 9
             else if (m.button === Qt.LeftButton && triad.begin(m.x, m.y)) mode = 8
             else if (m.button === Qt.LeftButton && (vp.grabHit = vp.bodyGrabAt(m.x, m.y))) mode = 11
+            else if (vp.nearSection(m.x, m.y) && vp.beginSectionDrag(m.x, m.y)) mode = 4
             else if (vp.nearMove(m.x, m.y) && vp.beginMoveDrag()) mode = 4
             else if (vp.nearAngle(m.x, m.y) && vp.beginAngleDrag()) mode = 4
             else if (vp.nearManip(m.x, m.y) && vp.beginManipDrag(m.x, m.y)) mode = 4
@@ -1428,6 +1488,7 @@ Item {
                 vp.sketchMove(m.x, m.y)
             } else if (!pressed) {
                 vp.manipHover = triad.hover(m.x, m.y) || vp.nearManip(m.x, m.y) || vp.nearAngle(m.x, m.y)
+                                || vp.nearSection(m.x, m.y)
                                 || vp.nearMove(m.x, m.y) || !!vp.planeEdgeAt(m.x, m.y)
                 if (vp.manipHover) r.clearHover()
                 else r.hover(m.x, m.y)
@@ -1860,26 +1921,30 @@ Item {
     Canvas {
         id: manipCanvas
         anchors.fill: parent
-        visible: !!vp.manip
-            onPaint: {
+        visible: !!vp.manip || !!vp.sectionManip
+        onPaint: {
             const c = getContext("2d")
             c.reset()
-            const s = vp.manipScreen()
-            if (!s) return
+            function paintArrow(s, hot) {
+                if (!s) return
+                c.strokeStyle = Theme.manipulator
+                c.fillStyle = Theme.manipulator
+                c.lineWidth = hot ? 3 : 2
+                c.beginPath(); c.moveTo(s.o[0], s.o[1]); c.lineTo(s.t[0], s.t[1]); c.stroke()
+                c.beginPath(); c.arc(s.o[0], s.o[1], 3, 0, Math.PI * 2); c.fill()
+                const len = hot ? 22 : 18, half = hot ? 8 : 6.5
+                const bx = s.t[0], by = s.t[1], dx = s.d[0], dy = s.d[1]
+                c.beginPath()
+                c.moveTo(bx + dx * len, by + dy * len)
+                c.lineTo(bx - dy * half, by + dx * half)
+                c.lineTo(bx + dy * half, by - dx * half)
+                c.closePath()
+                c.fill()
+            }
             const hot = vp.manipHover || vp.manipDrag
-            c.strokeStyle = Theme.manipulator
-            c.fillStyle = Theme.manipulator
-            c.lineWidth = hot ? 3 : 2
-            c.beginPath(); c.moveTo(s.o[0], s.o[1]); c.lineTo(s.t[0], s.t[1]); c.stroke()
-            c.beginPath(); c.arc(s.o[0], s.o[1], 3, 0, Math.PI * 2); c.fill()
-            const len = hot ? 22 : 18, half = hot ? 8 : 6.5
-            const bx = s.t[0], by = s.t[1], dx = s.d[0], dy = s.d[1]
-            c.beginPath()
-            c.moveTo(bx + dx * len, by + dy * len)
-            c.lineTo(bx - dy * half, by + dx * half)
-            c.lineTo(bx + dy * half, by - dx * half)
-            c.closePath()
-            c.fill()
+            const draftOnly = vp.app.commandFeature && vp.app.commandFeature.type === "Draft"
+            if (!draftOnly) paintArrow(vp.manipScreen(), hot && !(vp.manipDrag && vp.manipDrag.section))
+            paintArrow(vp.sectionScreen(), hot && vp.manipDrag && vp.manipDrag.section)
 
             const as = vp.angleScreen()
             if (as) {
@@ -1942,7 +2007,7 @@ Item {
         readonly property var s: (vp.camRev, vp.width, vp.height, vp.manip, vp.manipScreen())
         readonly property var pos: (s, vp.angleScreen(), width, height, vp.manipBoxPos(width, height))
         readonly property string expr: (vp.app.rev, vp.manip && vp.app.commandFeature) ? String(vp.app.commandFeature.get(vp.manip.key)) : ""
-        visible: !!vp.manip && !!s
+        visible: !!vp.manip && !!s && !(vp.app.commandFeature && vp.app.commandFeature.type === "Draft")
         x: pos ? pos.x : 0
         y: pos ? pos.y : 0
         width: 120

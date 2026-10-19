@@ -207,6 +207,19 @@ bool RebuildContext::resolveProfiles(const QString &sketchId, const QVariantList
         indices = sketch->defaultProfiles();
     } else {
         for (const QVariant &v : profiles) indices.append(v.toInt());
+        // After a sketch edit, profile indices often shift. Fall back to the sketch's default
+        // closed regions so Extrude / Revolve / Sweep do not vanish with "Profile N no longer exists".
+        bool stale = false;
+        for (int i : indices)
+            if (i < 0 || i >= sketch->profileCount()) { stale = true; break; }
+        if (stale) {
+            indices = sketch->defaultProfiles();
+            if (indices.isEmpty()) {
+                error = QString("Sketch '%1' no longer has the selected profiles (and no closed profiles remain)")
+                            .arg(sketch->name());
+                return false;
+            }
+        }
     }
     QList<TopoDS_Shape> faces;
     for (int i : indices) {
@@ -308,14 +321,39 @@ TopoDS_Shape unifyTraced(const TopoDS_Shape &shape) {
     traceBoolean("unify", t.elapsed());
     return out;
 }
+
+// Join of several profiles (one Extrude/Revolve/...) must produce as few solids as possible. Without this,
+// empty-document Join falls through to addBodies() and each prism becomes its own BodyN.
+TopoDS_Shape fuseToolLumps(const TopoDS_Shape &tool, QString &error) {
+    QList<TopoDS_Shape> lumps = GeomUtils::solids(tool);
+    if (lumps.size() <= 1) return tool;
+    TopoDS_Shape acc = lumps.first();
+    for (int i = 1; i < lumps.size(); ++i) {
+        BRepAlgoAPI_Fuse fuse;
+        TopTools_ListOfShape args, tools;
+        args.Append(acc);
+        tools.Append(lumps[i]);
+        fuse.SetArguments(args);
+        fuse.SetTools(tools);
+        if (!buildBoolean(fuse, "Join", error)) return TopoDS_Shape();
+        acc = unifyTraced(fuse.Shape());
+    }
+    return acc;
+}
 }  // namespace
 
 bool RebuildContext::applyOperation(const TopoDS_Shape &tool, FeatureOperation op, const QVariantList &targets,
                                     const QString &featureId, QString &error) {
     if (tool.IsNull()) { error = "Feature produced no geometry"; return false; }
 
+    TopoDS_Shape work = tool;
+    if (op == FeatureOperation::Join) {
+        work = fuseToolLumps(tool, error);
+        if (work.IsNull()) return false;
+    }
+
     if (op == FeatureOperation::NewBody || (op == FeatureOperation::Join && bodies.isEmpty())) {
-        addBodies(tool, featureId);
+        addBodies(work, featureId);
         return true;
     }
 
@@ -341,7 +379,7 @@ bool RebuildContext::applyOperation(const TopoDS_Shape &tool, FeatureOperation o
     }
 
     if (idx.isEmpty()) {
-        if (op == FeatureOperation::Join) { addBodies(tool, featureId); return true; }
+        if (op == FeatureOperation::Join) { addBodies(work, featureId); return true; }
         error = op == FeatureOperation::Cut ? "Cut does not intersect any body" : "Intersect does not overlap any body";
         return false;
     }
@@ -350,7 +388,7 @@ bool RebuildContext::applyOperation(const TopoDS_Shape &tool, FeatureOperation o
         if (op == FeatureOperation::Join) {
             TopTools_ListOfShape args, tools;
             for (int i : idx) args.Append(bodies[i].shape);
-            tools.Append(tool);
+            tools.Append(work);
             BRepAlgoAPI_Fuse fuse;
             fuse.SetArguments(args);
             fuse.SetTools(tools);
@@ -371,7 +409,7 @@ bool RebuildContext::applyOperation(const TopoDS_Shape &tool, FeatureOperation o
             TopoDS_Shape result;
             TopTools_ListOfShape args, tools;
             args.Append(bodies[i].shape);
-            tools.Append(tool);
+            tools.Append(work);
             if (op == FeatureOperation::Cut) {
                 BRepAlgoAPI_Cut cut;
                 cut.SetArguments(args);

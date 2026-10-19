@@ -201,6 +201,38 @@ void testExtrudeAndParameters() {
           doc.parameter("width")->error());
 }
 
+void testJoinMultiProfileExtrude() {
+    // Two abutting rectangles extruded with Join must be one body (not Body1+Body2)
+    FissionDocument doc;
+    auto *s = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+    s->addRectangle(0, 0, 20, 20);
+    s->addRectangle(20, 0, 20, 20);
+    doc.rebuild();
+    check(s->profileCount() >= 2, "join multi-profile: two sketch regions",
+          QString("profiles=%1").arg(s->profileCount()));
+    auto *ex = doc.addFeature("Extrude",
+                              {{"sketch", s->id()},
+                               {"profiles", QVariantList{0, 1}},
+                               {"distance", "10 mm"},
+                               {"operation", "join"}});
+    check(ex && ex->isHealthy() && doc.bodyCount() == 1, "join multi-profile: Join makes one body",
+          QString("bodies=%1 %2").arg(doc.bodyCount()).arg(ex ? ex->error() : "no feature"));
+    checkVolume(&doc, 40 * 20 * 10, "join multi-profile: volume of the fused solid");
+
+    FissionDocument docNew;
+    auto *s2 = qobject_cast<FissionSketch *>(docNew.addFeature("Sketch", {{"plane", "XY"}}));
+    s2->addRectangle(0, 0, 20, 20);
+    s2->addRectangle(20, 0, 20, 20);
+    docNew.rebuild();
+    auto *nb = docNew.addFeature("Extrude",
+                                 {{"sketch", s2->id()},
+                                  {"profiles", QVariantList{0, 1}},
+                                  {"distance", "10 mm"},
+                                  {"operation", "newBody"}});
+    check(nb && nb->isHealthy() && docNew.bodyCount() == 2, "join multi-profile: New Body keeps two bodies",
+          QString("bodies=%1 %2").arg(docNew.bodyCount()).arg(nb ? nb->error() : "no feature"));
+}
+
 void testProfilesWithHoles() {
     FissionDocument doc;
     auto *s = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
@@ -2716,6 +2748,7 @@ int run() {
     FissionMeshConvert::setBackgroundTriangles(std::numeric_limits<int>::max());   // results right away
     testExpressions();
     testExtrudeAndParameters();
+    testJoinMultiProfileExtrude();
     testProfilesWithHoles();
     testFilletChamferShell();
     testRevolveLoftSweep();

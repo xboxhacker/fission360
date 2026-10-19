@@ -680,11 +680,23 @@ ApplicationWindow {
         selection.clear()
         if (sketchWasHidden && s) s.visible = false
         sketchWasHidden = false
-        if (sketchMarkerRestore >= 0) doc.timeline.marker = sketchMarkerRestore
-        sketchMarkerRestore = -1
+        // Roll the timeline forward again and rebuild now so Extrude (etc.) come back immediately
+        if (sketchMarkerRestore >= 0) {
+            doc.timeline.marker = sketchMarkerRestore
+            sketchMarkerRestore = -1
+            doc.rebuild()
+        }
         camera.setView("home", true)
         viewportItem.renderer.fitAll(true)
-        if (s) fissionApp.showMessage(s.name + ": " + (s.healthy ? s.profileCount + " profile(s)" : s.error))
+        if (s) {
+            let tip = ""
+            for (const info of doc.featureList()) {
+                if (info.healthy) continue
+                const bad = doc.featureById(info.id)
+                if (bad) { tip = " \u2014 " + bad.name + ": " + bad.error; break }
+            }
+            fissionApp.showMessage(s.name + ": " + (s.healthy ? s.profileCount + " profile(s)" : s.error) + tip)
+        }
     }
 
     function saveBodyAsMesh(index) {

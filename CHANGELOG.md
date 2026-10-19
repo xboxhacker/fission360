@@ -16,6 +16,12 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.22 — Join multi-profile extrude into one body
+- **Join** on Extrude/Revolve/etc. with several sketch profiles now fuses the resulting solids before adding bodies. An empty document no longer creates Body1+Body2 for two selected profiles when Join is selected (New Body still creates separate bodies).
+### 1.13.21 — source / rebuild: draft & section handles; sketch-edit body loss
+- **Draft** shows a viewport angle knob (drag to set the draft angle).
+- **Section Analysis** shows a viewport offset arrow (drag to move the cut plane); the panel slider still works.
+- **Sketch edit**: finishing a sketch restores the timeline marker and rebuilds immediately. Stale Extrude profile indices after a sketch change fall back to the sketch's default closed profiles so the body is not left deleted with `Profile N no longer exists`.
 ### 1.13.20 — 2026-10-19: fix missing OCCT DLLs in Windows release
 - Windows zip was missing `TKBRep.dll` (and related OCCT libs) because CMake copied from an incomplete `dep_OCCT-build/bin/occt` tree. Deploy now prefers `OrcaSlicer_dep/usr/local/bin/occt` (full runtime) and also copies `freetype.dll`.
 - `scripts/package-windows.ps1` refuses to ship without `TKBRep.dll` and backfills from `FISSION_ORCA_ROOT` if needed.

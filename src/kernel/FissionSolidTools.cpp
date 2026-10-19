@@ -665,6 +665,24 @@ bool FissionDraft::compute(RebuildContext &ctx) {
         if (result.IsNull()) return fail("Parting line draft failed");
         result = GeomUtils::unify(result);
     }
+
+    // Viewport angle knob: pivot on the first drafted face, height along the pull, lean against "out"
+    {
+        const TopoDS_Face &face = faces.first();
+        const gp_Pnt pivot = GeomUtils::faceCentroid(face);
+        gp_Vec outV(GeomUtils::shapeCentroid(ctx.bodies[body].shape), pivot);
+        outV -= gp_Vec(dir) * outV.Dot(gp_Vec(dir));
+        if (outV.Magnitude() < 1e-9) outV = gp_Vec(ax.XDirection());
+        const gp_Dir out(outV);
+        const Bnd_Box bb = GeomUtils::boundingBox(face);
+        double xmin, ymin, zmin, xmax, ymax, zmax;
+        bb.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+        const double height = std::max(8.0, gp_Pnt(xmin, ymin, zmin).Distance(gp_Pnt(xmax, ymax, zmax)) * 0.45);
+        // Distance arrow along the pull is visual only; the angle knob writes "angle"
+        setManipulator(pivot, dir, QStringLiteral("distance"), height);
+        setAngleManipulator(pivot, dir, out, height, QStringLiteral("angle"), angle);
+    }
+
     replaceBody(ctx, body, result, id());
     return true;
 }
