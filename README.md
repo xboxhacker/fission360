@@ -4,6 +4,8 @@
 
 A fast, offline, parametric 3D CAD application. Designs are a **timeline of editable features** you can scrub, reorder and re-dimension — not a bag of frozen mesh files. No cloud, no sign-in, no subscription. The whole design lives in one small text file you own.
 
+**Where Fission sits:** Fission is the OCCT-backed, print-shop CAD — industry STEP/IGES through [Open CASCADE](https://dev.opencascade.org/), a **Fusion 360 → `.f360` import** path, and **one-click Send to Slicer** (OrcaSlicer / Bambu Studio). It is not trying to be the only open CAD on GitHub; it is the one that speaks manufacturing file formats and your existing Fusion / slicer workflow. Other open projects (including [SolidCraft](https://github.com/tangency-labs/solidcraft)) prove the category is real — we stay clean-room relative to them too: **ideas and public docs only, never their source.**
+
 Written clean-room: the codebase is hand-built and not derived from another vendor's CAD. Fission 360 is independent — see [Trademark note](#trademark-note) and [IP / Autodesk](#ip--autodesk).
 
 ![Fission 360 — Demo Bracket](docs/screenshot.png)
@@ -94,6 +96,8 @@ The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python
 
 Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history, autosave, and **Send to Slicer** are in. Up next: CAM (toolpaths, post-processing, simulation) and optional lock/sync.
 
+Peer ideas we may re-implement (command registry, MCP, oracle tests, better installers) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md).
+
 More detail: [`CHANGELOG.md`](CHANGELOG.md) · [`FISSION_360_PROJECT.md`](FISSION_360_PROJECT.md)
 
 ## License
@@ -120,4 +124,4 @@ Fusion's behaviour, UI layout and public API documentation are used as **referen
 
 ## Trademark note
 
-"Fusion" and "Autodesk" are trademarks of Autodesk, Inc. **Fission 360 is not affiliated with, endorsed by, or sponsored by Autodesk.** "Fusion 360" is mentioned only to describe the import interop feature. "McMaster-Carr", "OrcaSlicer" and "Bambu Studio" are trademarks of their respective owners.
+"Fusion" and "Autodesk" are trademarks of Autodesk, Inc. **Fission 360 is not affiliated with, endorsed by, or sponsored by Autodesk.** "Fusion 360" is mentioned only to describe the import interop feature. "McMaster-Carr", "OrcaSlicer" and "Bambu Studio" are trademarks of their respective owners. SolidCraft is an independent open-source project; Fission is not affiliated with tangency-labs or SolidCraft.

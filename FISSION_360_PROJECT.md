@@ -177,8 +177,8 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - A self-test or UI-test process left running locks the exe and the next link fails with LNK1104: `Get-Process Fission360 | Stop-Process -Force` before building, and start test runs with a timeout (`$p.WaitForExit(300000)`)
 
 ## Current State
-*(Source at version **1.13.22** — Join multi-profile extrude fuses into one body.
-- **Version 1.13.22** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
+*(Source at version **1.13.23** — positioning blurb + peer-inspiration notes (SolidCraft ideas only).
+- **Version 1.13.23** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
 - **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`

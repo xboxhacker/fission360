@@ -16,6 +16,9 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.23 — source only: positioning + peer inspiration
+- README positioning: OCCT + Fusion import + Send to Slicer (not “only open CAD on GitHub”).
+- `docs/peer-inspiration.md` — ideas from SolidCraft’s *public* docs (command registry, MCP, CLI/oracle, packaging); **no source copied**.
 ### 1.13.22 — Join multi-profile extrude into one body
 - **Join** on Extrude/Revolve/etc. with several sketch profiles now fuses the resulting solids before adding bodies. An empty document no longer creates Body1+Body2 for two selected profiles when Join is selected (New Body still creates separate bodies).
 ### 1.13.21 — source / rebuild: draft & section handles; sketch-edit body loss
