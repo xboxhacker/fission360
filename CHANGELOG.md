@@ -16,9 +16,9 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
-### 1.13.19 — source only (not built yet): project folder cleanup
+### 1.13.19 — 2026-10-19: cleanup + Windows GitHub Release
 - Removed root clutter: old `build*_log.txt` / `fission_build*.txt` / `occt_*.txt` dumps, `aqt`/smoke logs, duplicate `shot_*.png` (README screenshot remains `docs/screenshot.png`), empty `uitest/` and `docs/external_edits/`.
-- Tightened `.gitignore`. Also wiped `build-rel/` and `dist/` to free disk space (re-run cmake + `scripts/package-windows.ps1` to recreate a Windows release).
+- Tightened `.gitignore`. Wiped `build-rel/`/`dist/` earlier, then rebuilt and published `Fission360-1.13.19-windows-x64.zip` to https://github.com/xboxhacker/fission360/releases/tag/v1.13.19
 ### 1.13.18 — source only (not built yet): multi-platform release sketch
 - Added `docs/ci-release-sketch.md` (goals, CMake blockers, Qt/OCCT cache strategy, job flow, implementation order).
 - Stub `.github/workflows/release.yml` (Windows/macOS/Linux + publish; all jobs disabled with `if: false` until caches/Unix CMake exist).
