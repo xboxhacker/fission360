@@ -1010,7 +1010,7 @@ Item {
         function onChanged() {
             vp.camRev++
             if (vp.app.activeSketchId) { preview.requestPaint(); annoCanvas.requestPaint() }
-            if (vp.manip) manipCanvas.requestPaint()
+            if ((vp.manip || vp.sectionManip) && manipCanvas) manipCanvas.requestPaint()
             if (triad.gizmo) triad.requestPaint()
             if (vp.app.pointPick) pointCanvas.requestPaint()
         }
@@ -1036,15 +1036,17 @@ Item {
     onManipChanged: {
         // A focused value box would keep swallowing the single-key shortcuts after the command ends
         if (!manip && manipField.activeFocus) vp.forceActiveFocus()
-        manipCanvas.requestPaint()
+        if (manipCanvas) manipCanvas.requestPaint()
     }
-    onSectionManipChanged: manipCanvas.requestPaint()
+    onSectionManipChanged: if (manipCanvas) manipCanvas.requestPaint()
+    // manipCanvas is a child id, not vp.manipCanvas — guard until the Canvas exists
+    function repaintManip() { if (manipCanvas) manipCanvas.requestPaint() }
     Connections {
         target: app
-        function onSectionOffsetChanged() { vp.manipCanvas.requestPaint() }
-        function onSectionFlipChanged() { vp.manipCanvas.requestPaint() }
-        function onSectionEnabledChanged() { vp.manipCanvas.requestPaint() }
-        function onInspectModeChanged() { vp.manipCanvas.requestPaint() }
+        function onSectionOffsetChanged() { vp.repaintManip() }
+        function onSectionFlipChanged() { vp.repaintManip() }
+        function onSectionEnabledChanged() { vp.repaintManip() }
+        function onInspectModeChanged() { vp.repaintManip() }
     }
 
     // Screen geometry of the handle: base, tip and a unit screen direction for the arrow head
@@ -1322,18 +1324,20 @@ Item {
     }
 
     function moveManipDrag(x, y) {
-        const f = app.commandFeature
-        if (!manipDrag || !f) return
-        if (manipDrag.move) { moveTo(x, y); return }
+        if (!manipDrag) return
+        // Section Analysis has no commandFeature — handle it before the feature-only path
         if (manipDrag.section) {
             const t = r.axisParameter(x, y, manipDrag.origin, manipDrag.direction)
             if (t === undefined) return
             const step = Math.max(0.01, r.snapStep() / 2)
             let v = Math.round((t + manipDrag.offset) / step) * step
             app.sectionOffset = app.sectionFlip ? -v : v
-            manipCanvas.requestPaint()
+            if (manipCanvas) manipCanvas.requestPaint()
             return
         }
+        const f = app.commandFeature
+        if (!f) return
+        if (manipDrag.move) { moveTo(x, y); return }
         if (manipDrag.angle) {
             const a = manipDrag.angle
             const t = r.axisParameter(x, y, a.pivot.plus(a.up.times(a.height)), a.out)
@@ -1944,7 +1948,7 @@ Item {
             const hot = vp.manipHover || vp.manipDrag
             const draftOnly = vp.app.commandFeature && vp.app.commandFeature.type === "Draft"
             if (!draftOnly) paintArrow(vp.manipScreen(), hot && !(vp.manipDrag && vp.manipDrag.section))
-            paintArrow(vp.sectionScreen(), hot && vp.manipDrag && vp.manipDrag.section)
+            paintArrow(vp.sectionScreen(), hot && (!vp.manipDrag || vp.manipDrag.section))
 
             const as = vp.angleScreen()
             if (as) {

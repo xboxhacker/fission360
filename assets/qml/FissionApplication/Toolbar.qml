@@ -329,28 +329,29 @@ Rectangle {
                     "Export the selected (or all) VISIBLE bodies to a temp STL and open OrcaSlicer or Bambu Studio (Display Settings \u25B8 Slicer). Hidden bodies are never sent")
             ] },
             { title: "SETUP", quick: 2, items: [
-                planned("New Setup", "plane", "Phase 12"),
-                planned("Tool Library", "settings", "Phase 12")
+                act("New Setup", "plane", () => app.mfgNewSetup(), "Create a manufacture setup (stock from body bounds)"),
+                act("Tool Library", "settings", () => app.openManufacture(1), "Edit tools saved with this design"),
+                act("Manufacture Panel", "settings", () => app.openManufacture(), "Open the Manufacture panel")
             ] },
             { title: "MILLING", quick: 3, items: [
-                planned("2D Adaptive", "extrude", "Phase 12"),
-                planned("2D Pocket", "extrude", "Phase 12"),
-                planned("2D Contour", "extrude", "Phase 12"),
-                planned("Face", "extrude", "Phase 12"),
-                planned("Drill", "hole", "Phase 12"),
-                planned("3D Adaptive", "extrude", "Phase 12"),
-                planned("Parallel", "extrude", "Phase 12"),
-                planned("Scallop", "extrude", "Phase 12")
+                act("2D Adaptive", "extrude", () => app.mfgAddOp("2d-adaptive", "2D Adaptive")),
+                act("2D Pocket", "extrude", () => app.mfgAddOp("2d-pocket", "2D Pocket")),
+                act("2D Contour", "extrude", () => app.mfgAddOp("2d-contour", "2D Contour")),
+                act("Face", "extrude", () => app.mfgAddOp("face", "Face")),
+                act("Drill", "hole", () => app.mfgAddOp("drill", "Drill")),
+                act("3D Adaptive", "extrude", () => app.mfgAddOp("3d-adaptive", "3D Adaptive")),
+                act("Parallel", "extrude", () => app.mfgAddOp("parallel", "Parallel")),
+                act("Scallop", "extrude", () => app.mfgAddOp("scallop", "Scallop"))
             ] },
             { title: "TURNING", quick: 2, items: [
-                planned("Facing", "revolve", "Phase 12"),
-                planned("Profiling", "revolve", "Phase 12"),
-                planned("Grooving", "revolve", "Phase 12"),
-                planned("Parting", "revolve", "Phase 12")
+                act("Facing", "revolve", () => app.mfgAddOp("turning-face", "Facing")),
+                act("Profiling", "revolve", () => app.mfgAddOp("turning-profile", "Profiling")),
+                act("Grooving", "revolve", () => app.mfgAddOp("turning-groove", "Grooving")),
+                act("Parting", "revolve", () => app.mfgAddOp("turning-part", "Parting"))
             ] },
             { title: "FINISH", quick: 2, items: [
-                planned("Simulate", "view", "Phase 12"),
-                planned("Post Process", "export", "Phase 12")
+                act("Simulate", "view", () => app.mfgSimulate(), "Report operations on the active setup"),
+                act("Post Process", "export", () => app.mfgPostProcess(), "Export placeholder G-code for the active setup")
             ] },
             selectGroup
         ],

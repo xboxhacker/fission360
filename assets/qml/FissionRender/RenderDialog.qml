@@ -112,10 +112,18 @@ Item {
                     eye: cam ? [cam.eye.x, cam.eye.y, cam.eye.z] : [200, -200, 150],
                     target: cam ? [cam.target.x, cam.target.y, cam.target.z] : [0, 0, 0],
                     up: [0, 0, 1],
-                    fov: cam ? cam.fieldOfView() : 30,
+                    fov: cam ? cam.fieldOfView : 30,
                     ortho: cam ? cam.orthographic : false
                 }
-                const out = app.doc.pathTraceToFile(local, camera)
+                // Ensure the chosen format matches the dialog filter (QImage::save needs an extension).
+                let outPath = local
+                const fmt = settings ? settings.outputFormat : "png"
+                const ext = "." + (fmt === "jpg" ? "jpg" : fmt === "tiff" ? "tif" : fmt)
+                if (!outPath.toLowerCase().endsWith(ext) && !outPath.toLowerCase().endsWith("." + fmt)
+                        && !(fmt === "tiff" && outPath.toLowerCase().endsWith(".tiff"))
+                        && !(fmt === "jpg" && outPath.toLowerCase().endsWith(".jpeg")))
+                    outPath += ext
+                const out = app.doc.pathTraceToFile(outPath, camera)
                 if (out) {
                     const rid = "render-" + Date.now()
                     app.doc.linkAsset("render", rid, "Path trace", out)

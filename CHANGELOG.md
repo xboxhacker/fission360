@@ -16,6 +16,14 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.25 — Ctrl+Y redo; section offset arrow; MFG wiring; requestPaint
+- **Ctrl+Y** (and Ctrl+Shift+Z) redo via `ApplicationShortcut`; status when nothing to redo.
+- **Section Analysis** offset arrow: drag no longer required a command feature (`moveManipDrag` early-return bug).
+- `Viewport` `requestPaint` TypeError: `manipCanvas` is a child id, not `vp.manipCanvas` — guarded `repaintManip()`.
+- **Manufacture**: setups / tools / ops saved on the design; toolbar + panel + Post (placeholder G-code) + Simulate; Send to Slicer unchanged.
+### 1.13.24 — fix: path-trace Export Image TypeError
+- Render Export called `cam.fieldOfView()` but FOV was not a QML function — export aborted with no file.
+- Expose `ViewportController.fieldOfView` as a property; append format extension; `QImage::save` uses explicit PNG/JPG/TIFF/BMP.
 ### 1.13.23 — source only: positioning + peer inspiration
 - README positioning: OCCT + Fusion import + Send to Slicer (not “only open CAD on GitHub”).
 - `docs/peer-inspiration.md` — ideas from SolidCraft’s *public* docs (command registry, MCP, CLI/oracle, packaging); **no source copied**.

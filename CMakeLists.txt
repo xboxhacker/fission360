@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Fission360 VERSION 1.13.23 LANGUAGES CXX)
+project(Fission360 VERSION 1.13.25 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -180,6 +180,7 @@ qt_add_resources(Fission360 "fission_qml"
         "${FISSION_QML_DIR}/FissionApplication/SheetMetalRulesDialog.qml"
         "${FISSION_QML_DIR}/FissionApplication/VersionHistoryDialog.qml"
         "${FISSION_QML_DIR}/FissionApplication/RecoverAutosaveDialog.qml"
+        "${FISSION_QML_DIR}/FissionApplication/ManufactureDialog.qml"
         "${FISSION_QML_DIR}/FissionApplication/MoveTriad.qml"
         "${FISSION_QML_DIR}/FissionApplication/SketchMovePanel.qml"
         "${FISSION_QML_DIR}/FissionRender/qmldir"

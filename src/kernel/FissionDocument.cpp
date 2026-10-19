@@ -13,6 +13,8 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <algorithm>
+#include <QByteArray>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -57,6 +59,7 @@
 FissionDocument::FissionDocument(QObject *parent)
     : QObject(parent), m_timeline(new FissionTimeline(this)), m_renderSettings(new RenderSettings(this)) {
     m_documentId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_manufacture = defaultManufacture();
     m_rebuildTimer.setSingleShot(true);
     // Coalesce property edits / manip typing into one rebuild per frame-ish
     m_rebuildTimer.setInterval(16);
@@ -182,10 +185,248 @@ QString FissionDocument::pathTraceToFile(const QString &path, const QVariantMap 
     });
     if (auto *app = FissionApplication::instance())
         app->endTask(QStringLiteral("path-trace"));
-    if (img.isNull() || !img.save(path)) {
-        m_lastError = QStringLiteral("Could not write path-traced image");
+    if (img.isNull()) {
+        m_lastError = QStringLiteral("Path tracer produced an empty image");
         return {};
     }
+    // Explicit format from extension so Save-without-.png still works on some dialogs
+    QByteArray fmt;
+    const QString lower = path.toLower();
+    if (lower.endsWith(QLatin1String(".jpg")) || lower.endsWith(QLatin1String(".jpeg"))) fmt = "JPG";
+    else if (lower.endsWith(QLatin1String(".tif")) || lower.endsWith(QLatin1String(".tiff"))) fmt = "TIFF";
+    else if (lower.endsWith(QLatin1String(".bmp"))) fmt = "BMP";
+    else fmt = "PNG";
+    if (!img.save(path, fmt.constData())) {
+        m_lastError = QStringLiteral("Could not write path-traced image to %1").arg(path);
+        return {};
+    }
+    m_lastError.clear();
+    return path;
+}
+
+QVariantMap FissionDocument::defaultManufacture() {
+    QVariantList tools;
+    tools << QVariantMap{{"id", QStringLiteral("tool-em6")},
+                         {"name", QStringLiteral("Ø6 Flat End Mill")},
+                         {"type", QStringLiteral("endmill")},
+                         {"diameter", 6.0},
+                         {"flutes", 4},
+                         {"length", 50.0}};
+    tools << QVariantMap{{"id", QStringLiteral("tool-drill33")},
+                         {"name", QStringLiteral("Ø3.3 Drill")},
+                         {"type", QStringLiteral("drill")},
+                         {"diameter", 3.3},
+                         {"flutes", 2},
+                         {"length", 60.0}};
+    tools << QVariantMap{{"id", QStringLiteral("tool-em10")},
+                         {"name", QStringLiteral("Ø10 Face Mill")},
+                         {"type", QStringLiteral("facemill")},
+                         {"diameter", 10.0},
+                         {"flutes", 5},
+                         {"length", 40.0}};
+    return QVariantMap{{"setups", QVariantList()},
+                       {"tools", tools},
+                       {"operations", QVariantList()},
+                       {"activeSetupId", QString()}};
+}
+
+void FissionDocument::setManufacture(const QVariantMap &m) {
+    checkpoint();
+    m_manufacture = m.isEmpty() ? defaultManufacture() : m;
+    if (!m_manufacture.contains(QStringLiteral("setups")))
+        m_manufacture.insert(QStringLiteral("setups"), QVariantList());
+    if (!m_manufacture.contains(QStringLiteral("tools")))
+        m_manufacture.insert(QStringLiteral("tools"), QVariantList());
+    if (!m_manufacture.contains(QStringLiteral("operations")))
+        m_manufacture.insert(QStringLiteral("operations"), QVariantList());
+    setModified(true);
+    emit manufactureChanged();
+}
+
+QString FissionDocument::addMfgItem(const QString &kind, const QVariantMap &props) {
+    if (kind != QLatin1String("setups") && kind != QLatin1String("tools") && kind != QLatin1String("operations")) {
+        m_lastError = QStringLiteral("Unknown manufacture list: ") + kind;
+        return {};
+    }
+    checkpoint();
+    QVariantList list = m_manufacture.value(kind).toList();
+    QVariantMap item = props;
+    if (item.value(QStringLiteral("id")).toString().isEmpty())
+        item.insert(QStringLiteral("id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (kind == QLatin1String("setups")) {
+        if (item.value(QStringLiteral("name")).toString().isEmpty())
+            item.insert(QStringLiteral("name"), QStringLiteral("Setup%1").arg(list.size() + 1));
+        if (!item.contains(QStringLiteral("wcs")))
+            item.insert(QStringLiteral("wcs"), QStringLiteral("model"));
+        if (!item.contains(QStringLiteral("stockOffset")))
+            item.insert(QStringLiteral("stockOffset"), 2.0);
+        // Stock from body bounds when bodies exist
+        if (!item.contains(QStringLiteral("stock")) && !m_bodies.isEmpty()) {
+            double box[6] = {1e9, 1e9, 1e9, -1e9, -1e9, -1e9};
+            bool any = false;
+            for (auto *b : m_bodies) {
+                double bb[6];
+                if (!b || !b->box(bb)) continue;
+                any = true;
+                for (int i = 0; i < 3; ++i) {
+                    box[i] = std::min(box[i], bb[i]);
+                    box[i + 3] = std::max(box[i + 3], bb[i + 3]);
+                }
+            }
+            if (any) {
+                const double o = item.value(QStringLiteral("stockOffset")).toDouble();
+                item.insert(QStringLiteral("stock"),
+                            QVariantList{box[0] - o, box[1] - o, box[2] - o, box[3] + o, box[4] + o, box[5] + o});
+            }
+        }
+        m_manufacture.insert(QStringLiteral("activeSetupId"), item.value(QStringLiteral("id")));
+    } else if (kind == QLatin1String("tools")) {
+        if (item.value(QStringLiteral("name")).toString().isEmpty())
+            item.insert(QStringLiteral("name"), QStringLiteral("Tool%1").arg(list.size() + 1));
+        if (!item.contains(QStringLiteral("type")))
+            item.insert(QStringLiteral("type"), QStringLiteral("endmill"));
+        if (!item.contains(QStringLiteral("diameter")))
+            item.insert(QStringLiteral("diameter"), 6.0);
+    } else { // operations
+        if (item.value(QStringLiteral("name")).toString().isEmpty()) {
+            const QString type = item.value(QStringLiteral("type"), QStringLiteral("2d-contour")).toString();
+            item.insert(QStringLiteral("name"), type);
+        }
+        if (item.value(QStringLiteral("setupId")).toString().isEmpty())
+            item.insert(QStringLiteral("setupId"), m_manufacture.value(QStringLiteral("activeSetupId")));
+        if (!item.contains(QStringLiteral("feed")))
+            item.insert(QStringLiteral("feed"), 500.0);
+        if (!item.contains(QStringLiteral("speed")))
+            item.insert(QStringLiteral("speed"), 8000.0);
+        if (!item.contains(QStringLiteral("stepdown")))
+            item.insert(QStringLiteral("stepdown"), 1.0);
+    }
+    const QString id = item.value(QStringLiteral("id")).toString();
+    list.append(item);
+    m_manufacture.insert(kind, list);
+    setModified(true);
+    emit manufactureChanged();
+    m_lastError.clear();
+    return id;
+}
+
+bool FissionDocument::updateMfgItem(const QString &kind, const QString &id, const QVariantMap &patch) {
+    QVariantList list = m_manufacture.value(kind).toList();
+    int idx = -1;
+    for (int i = 0; i < list.size(); ++i)
+        if (list[i].toMap().value(QStringLiteral("id")).toString() == id) {
+            idx = i;
+            break;
+        }
+    if (idx < 0) {
+        m_lastError = QStringLiteral("Manufacture item not found");
+        return false;
+    }
+    checkpoint();
+    QVariantMap item = list[idx].toMap();
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        if (it.key() == QLatin1String("id")) continue;
+        item.insert(it.key(), it.value());
+    }
+    list[idx] = item;
+    m_manufacture.insert(kind, list);
+    setModified(true);
+    emit manufactureChanged();
+    return true;
+}
+
+bool FissionDocument::removeMfgItem(const QString &kind, const QString &id) {
+    QVariantList list = m_manufacture.value(kind).toList();
+    int idx = -1;
+    for (int i = 0; i < list.size(); ++i)
+        if (list[i].toMap().value(QStringLiteral("id")).toString() == id) {
+            idx = i;
+            break;
+        }
+    if (idx < 0) return false;
+    checkpoint();
+    list.removeAt(idx);
+    m_manufacture.insert(kind, list);
+    if (kind == QLatin1String("setups") && m_manufacture.value(QStringLiteral("activeSetupId")).toString() == id)
+        m_manufacture.insert(QStringLiteral("activeSetupId"),
+                             list.isEmpty() ? QString() : list.last().toMap().value(QStringLiteral("id")).toString());
+    setModified(true);
+    emit manufactureChanged();
+    return true;
+}
+
+void FissionDocument::setActiveMfgSetup(const QString &id) {
+    if (m_manufacture.value(QStringLiteral("activeSetupId")).toString() == id) return;
+    checkpoint();
+    m_manufacture.insert(QStringLiteral("activeSetupId"), id);
+    setModified(true);
+    emit manufactureChanged();
+}
+
+QString FissionDocument::exportMfgGCode(const QString &path) {
+    if (path.isEmpty()) {
+        m_lastError = QStringLiteral("No output path");
+        return {};
+    }
+    const QString setupId = m_manufacture.value(QStringLiteral("activeSetupId")).toString();
+    QVariantMap setup;
+    for (const QVariant &v : m_manufacture.value(QStringLiteral("setups")).toList()) {
+        const QVariantMap s = v.toMap();
+        if (s.value(QStringLiteral("id")).toString() == setupId) {
+            setup = s;
+            break;
+        }
+    }
+    if (setup.isEmpty()) {
+        m_lastError = QStringLiteral("Create a New Setup before Post Process");
+        return {};
+    }
+    QVariantList ops;
+    for (const QVariant &v : m_manufacture.value(QStringLiteral("operations")).toList()) {
+        const QVariantMap o = v.toMap();
+        if (o.value(QStringLiteral("setupId")).toString() == setupId) ops.append(o);
+    }
+    if (ops.isEmpty()) {
+        m_lastError = QStringLiteral("No operations on the active setup");
+        return {};
+    }
+
+    QString gcode;
+    gcode += QStringLiteral("(Fission 360 manufacture export — placeholder NC)\n");
+    gcode += QStringLiteral("(Setup: %1)\n").arg(setup.value(QStringLiteral("name")).toString());
+    gcode += QStringLiteral("G21 G90 G94\nG17\n");
+    const QVariantList stock = setup.value(QStringLiteral("stock")).toList();
+    double zSafe = stock.size() >= 6 ? stock[5].toDouble() + 5.0 : 50.0;
+    gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
+    int n = 1;
+    for (const QVariant &v : ops) {
+        const QVariantMap o = v.toMap();
+        gcode += QStringLiteral("(Op %1: %2 / %3)\n").arg(n++).arg(o.value(QStringLiteral("type")).toString(),
+                                                                   o.value(QStringLiteral("name")).toString());
+        const double feed = o.value(QStringLiteral("feed"), 500.0).toDouble();
+        const double speed = o.value(QStringLiteral("speed"), 8000.0).toDouble();
+        gcode += QStringLiteral("S%1 M3\n").arg(int(speed));
+        if (stock.size() >= 6) {
+            const double x0 = stock[0].toDouble(), y0 = stock[1].toDouble();
+            const double x1 = stock[3].toDouble(), y1 = stock[4].toDouble();
+            const double z = stock[2].toDouble() + o.value(QStringLiteral("stepdown"), 1.0).toDouble();
+            gcode += QStringLiteral("G0 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
+            gcode += QStringLiteral("G1 Z%1 F%2\n").arg(z, 0, 'f', 3).arg(feed, 0, 'f', 1);
+            gcode += QStringLiteral("G1 X%1 Y%2 F%3\n").arg(x1, 0, 'f', 3).arg(y0, 0, 'f', 3).arg(feed, 0, 'f', 1);
+            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3);
+            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y1, 0, 'f', 3);
+            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
+        }
+        gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
+    }
+    gcode += QStringLiteral("M5\nM30\n");
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        m_lastError = file.errorString();
+        return {};
+    }
+    file.write(gcode.toUtf8());
     m_lastError.clear();
     return path;
 }
@@ -387,10 +628,10 @@ bool FissionDocument::revertToVersion(int versionNumber) {
     // Snapshot may carry an older contentRevision — advance past the pre-revert stamp so links go stale
     m_contentRevision = prevRev;
     bumpContentRevision();
-    m_modified = true;
-    emit modifiedChanged();
-    return true;
-}
+            m_modified = true;
+            emit modifiedChanged();
+            return true;
+        }
 
 bool FissionDocument::writeAutosaveNow() {
     return DocumentVersionStore::instance()->writeAutosave(
@@ -405,7 +646,7 @@ bool FissionDocument::loadAutosave(const QString &documentId) {
     const QByteArray raw = DocumentVersionStore::instance()->loadAutosave(documentId);
     if (raw.isEmpty()) {
         m_lastError = QStringLiteral("No autosave for that document");
-        return false;
+    return false;
     }
     const QJsonObject obj = QJsonDocument::fromJson(raw).object();
     if (obj.isEmpty()) {
@@ -449,7 +690,7 @@ FissionFeature *FissionDocument::addFeature(const QString &type, const QVariantM
     FissionFeature *f = FissionFeature::create(type, this);
     if (!f) {
         m_lastError = QString("Unknown feature type '%1'").arg(type);
-        return nullptr;
+    return nullptr;
     }
     if (QStringList{"BaseFlange", "EdgeFlange", "FlatPattern", "Hem", "Tab", "Bend", "ContourFlange", "Unfold"}.contains(type)) ensureSheetMetalRule();
     checkpoint();
@@ -934,6 +1175,7 @@ void FissionDocument::clearContent() {
     }
     m_parameters.clear();
     m_analyses.clear();
+    m_manufacture = defaultManufacture();
 }
 
 QJsonObject FissionDocument::toJson() const {
@@ -981,6 +1223,8 @@ QJsonObject FissionDocument::toJson() const {
     obj["bodyDisplay"] = display;
     obj["analyses"] = QJsonArray::fromVariantList(m_analyses);
     if (m_renderSettings) obj["render"] = QJsonObject::fromVariantMap(m_renderSettings->toJson());
+    if (!m_manufacture.isEmpty())
+        obj["manufacture"] = QJsonObject::fromVariantMap(m_manufacture);
     return obj;
 }
 
@@ -1048,6 +1292,15 @@ void FissionDocument::fromJson(const QJsonObject &obj) {
     }
     m_analyses = obj["analyses"].toArray().toVariantList();
     emit analysesChanged();
+    if (obj.contains(QStringLiteral("manufacture")))
+        m_manufacture = obj["manufacture"].toObject().toVariantMap();
+    else
+        m_manufacture = defaultManufacture();
+    if (!m_manufacture.contains(QStringLiteral("tools")) || m_manufacture.value(QStringLiteral("tools")).toList().isEmpty()) {
+        QVariantMap def = defaultManufacture();
+        m_manufacture.insert(QStringLiteral("tools"), def.value(QStringLiteral("tools")));
+    }
+    emit manufactureChanged();
     if (m_renderSettings && obj.contains("render"))
         m_renderSettings->fromJson(obj["render"].toObject().toVariantMap());
     emit parametersChanged();
@@ -1278,7 +1531,7 @@ static QJsonObject fusionSolidFeature(const QString &fType, const QJsonObject &s
             return src[QLatin1String(key) + QLatin1String("Expr")].toString();
         if (src.contains(key)) return mmExpr(src[key].toDouble());
         if (fallbackKey && src.contains(fallbackKey)) return mmExpr(src[fallbackKey].toDouble());
-        return QString();
+    return QString();
     };
     auto takeDeg = [&](const char *key) {
         if (src.contains(QLatin1String(key) + QLatin1String("Expr")))
@@ -1759,7 +2012,7 @@ QString FissionDocument::exportBodies(const QString &path, const QVariantList &b
         ok = writer.Write(file.c_str());
     } else {
         m_lastError = QString("Unsupported export format '%1'").arg(fmt);
-        return QString();
+    return QString();
     }
     if (!ok) { m_lastError = QString("Failed to write %1").arg(path); return QString(); }
     return path;

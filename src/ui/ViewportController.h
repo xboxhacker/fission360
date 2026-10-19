@@ -15,6 +15,7 @@ class ViewportController : public QObject {
     Q_PROPERTY(QVector3D target READ target WRITE setTarget NOTIFY changed)
     Q_PROPERTY(QVector3D eye READ eye NOTIFY changed)
     Q_PROPERTY(bool orthographic READ orthographic WRITE setOrthographic NOTIFY changed)
+    Q_PROPERTY(double fieldOfView READ fieldOfView NOTIFY changed)
     Q_PROPERTY(QMatrix4x4 rotationMatrix READ rotationMatrix NOTIFY changed)
 
 public:

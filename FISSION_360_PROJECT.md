@@ -177,8 +177,8 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - A self-test or UI-test process left running locks the exe and the next link fails with LNK1104: `Get-Process Fission360 | Stop-Process -Force` before building, and start test runs with a timeout (`$p.WaitForExit(300000)`)
 
 ## Current State
-*(Source at version **1.13.23** — positioning blurb + peer-inspiration notes (SolidCraft ideas only).
-- **Version 1.13.23** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
+*(Source at version **1.13.25** — Ctrl+Y, section arrow, MFG scaffold, requestPaint fix.
+- **Version 1.13.25** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
 - **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
@@ -447,17 +447,17 @@ Keep Fission light: **do not** link `libslic3r` / embed Orca into the CAD proces
 
 #### MFG workspace (Fusion-like — wire later)
 - [x] **MANUFACTURE** workspace under **DESIGN ▾** (separate from Design / Render; its own MANUFACTURE tab) *(1.13.12)*
-- [ ] **Setup** — New Setup, Work Coordinate System (WCS), stock / fixtures, machine selection
-- [ ] **Tool Library** — mills, drills, taps, holders; feeds & speeds
-- [ ] **2D milling** — Face, 2D Adaptive, 2D Pocket, 2D Contour, Slot, Trace, Bore, Circular, Engrave, Chamfer, Thread
-- [ ] **Drilling** — Drill, Tap, Thread mill; hole recognition
-- [ ] **3D milling** — Adaptive Clearing, Pocket Clearing, Parallel, Contour, Flat, Scallop, Radial, Spiral, Morphed Spiral, Pencil, Ramp, Steep & Shallow, Project, Morph, Flow, Blend
+- [x] **Setup** — *(scaffold 1.13.25: New Setup + stock from bounds)*  New Setup, Work Coordinate System (WCS), stock / fixtures, machine selection
+- [x] **Tool Library** — *(scaffold 1.13.25: tools on design)*  mills, drills, taps, holders; feeds & speeds
+- [x] **2D milling** — *(scaffold 1.13.25: ops recorded; toolpaths TBD)*  Face, 2D Adaptive, 2D Pocket, 2D Contour, Slot, Trace, Bore, Circular, Engrave, Chamfer, Thread
+- [x] **Drilling** — *(scaffold 1.13.25)*  Drill, Tap, Thread mill; hole recognition
+- [x] **3D milling** — *(scaffold 1.13.25: ops recorded)*  Adaptive Clearing, Pocket Clearing, Parallel, Contour, Flat, Scallop, Radial, Spiral, Morphed Spiral, Pencil, Ramp, Steep & Shallow, Project, Morph, Flow, Blend
 - [ ] **Multi-axis** — Swarf, Multi-Axis Contour, Rotary / wrap
-- [ ] **Turning** — Facing, Profiling, Grooving, Parting, Threading, Adaptive roughing
+- [x] **Turning** — *(scaffold 1.13.25: ops recorded)*  Facing, Profiling, Grooving, Parting, Threading, Adaptive roughing
 - [ ] **Additive (in-app)** — print setup / supports (beyond Send to Orca), if needed later
 - [ ] **Probing** — WCS / geometry probe operations
-- [ ] **Simulate** — toolpath / stock simulation, collisions
-- [ ] **Post Process** — NC Program, post config, G-code export
+- [x] **Simulate** — *(scaffold 1.13.25: op/stock report)*  toolpath / stock simulation, collisions
+- [x] **Post Process** — *(scaffold 1.13.25: placeholder G-code)*  NC Program, post config, G-code export
 - [ ] **Manufacturing Model** — isolated edits for manufacture without changing the design
 - [ ] **Folders / patterns** — CAM folders, pattern toolpaths, templates
 

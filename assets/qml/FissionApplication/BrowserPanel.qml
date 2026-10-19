@@ -247,6 +247,47 @@ Rectangle {
                 }
 
                 Folder {
+                    title: "Manufacture"
+                    glyph: "settings"
+                    visible: {
+                        if (!browser.doc || !browser.doc.manufacture) return false
+                        const m = browser.doc.manufacture
+                        return (m.setups && m.setups.length) || (m.operations && m.operations.length)
+                    }
+                    count: {
+                        if (!browser.doc || !browser.doc.manufacture) return 0
+                        const m = browser.doc.manufacture
+                        return (m.setups ? m.setups.length : 0) + (m.operations ? m.operations.length : 0)
+                    }
+                    Repeater {
+                        model: browser.doc && browser.doc.manufacture ? (browser.doc.manufacture.setups || []) : []
+                        Row_ {
+                            required property var modelData
+                            glyph: "plane"
+                            glyphColor: Theme.accent
+                            label: modelData.name + (modelData.id === (browser.doc.manufacture.activeSetupId || "") ? " ●" : "")
+                            selected: browser.app.showManufacture
+                            onClicked: {
+                                browser.doc.setActiveMfgSetup(modelData.id)
+                                browser.app.openManufacture(0)
+                            }
+                            onDoubleClicked: browser.app.openManufacture(0)
+                        }
+                    }
+                    Repeater {
+                        model: browser.doc && browser.doc.manufacture ? (browser.doc.manufacture.operations || []) : []
+                        Row_ {
+                            required property var modelData
+                            glyph: "extrude"
+                            glyphColor: "#6b8e23"
+                            label: modelData.name
+                            onClicked: browser.app.openManufacture(2)
+                            onDoubleClicked: browser.app.openManufacture(2)
+                        }
+                    }
+                }
+
+                Folder {
                     title: "Origin"
                     open: false
                     showEye: true

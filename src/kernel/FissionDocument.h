@@ -46,6 +46,8 @@ class FissionDocument : public QObject {
     // [{id, name, type: "section", plane: ref, offset (mm), flip, visible}]
     Q_PROPERTY(QVariantList analyses READ analyses NOTIFY analysesChanged)
     Q_PROPERTY(RenderSettings *renderSettings READ renderSettings CONSTANT)
+    // Phase 12 manufacture data (setups / tools / operations) — light CAM scaffolding, not a full CAM kernel
+    Q_PROPERTY(QVariantMap manufacture READ manufacture NOTIFY manufactureChanged)
 
 public:
     explicit FissionDocument(QObject *parent = nullptr);
@@ -223,6 +225,16 @@ public:
     // Offline Monte Carlo path trace. camera: {eye, target, up, fov, ortho}. Returns local path or "" on failure.
     Q_INVOKABLE QString pathTraceToFile(const QString &path, const QVariantMap &camera);
 
+    QVariantMap manufacture() const { return m_manufacture; }
+    Q_INVOKABLE void setManufacture(const QVariantMap &m);
+    // kind: "setups" | "tools" | "operations". Returns new id or "".
+    Q_INVOKABLE QString addMfgItem(const QString &kind, const QVariantMap &props = {});
+    Q_INVOKABLE bool updateMfgItem(const QString &kind, const QString &id, const QVariantMap &patch);
+    Q_INVOKABLE bool removeMfgItem(const QString &kind, const QString &id);
+    Q_INVOKABLE void setActiveMfgSetup(const QString &id);
+    // Writes a simple NC program for the active setup's operations (placeholder G-code).
+    Q_INVOKABLE QString exportMfgGCode(const QString &path);
+
     QList<QObject *> bodyObjects() const;
     QList<QObject *> parameterObjects() const;
 
@@ -247,10 +259,12 @@ signals:
     void versionNumberChanged();
     void linkedAssetsChanged();
     void linkedDesignsChanged();
+    void manufactureChanged();
     // featureId empty on failure; firstBody/bodyCount are new body indices after a successful import
     void importCADFinished(const QString &featureId, const QString &error, int firstBody, int bodyCount);
 
 private:
+    static QVariantMap defaultManufacture();
     void bumpContentRevision();
     QByteArray snapshotJsonForHistory() const;
     void attachFeature(FissionFeature *f);
@@ -291,6 +305,7 @@ private:
     bool m_restoring = false;
     int m_rebuildCount = 0;
     QVariantList m_analyses;
+    QVariantMap m_manufacture;
     QList<QJsonObject> m_undo, m_redo;
     QString m_lastError;
     bool m_importCADBusy = false;

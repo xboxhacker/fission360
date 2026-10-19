@@ -103,6 +103,8 @@ ApplicationWindow {
     readonly property bool inRenderWorkspace: workspace === "render" && !inDrawing
     property bool showAppearance: false
     property bool showRender: false
+    property bool showManufacture: false
+    property int manufactureTab: 0
     property bool liveRender: false
     // Sketch: free clicks snap to grid when true (endpoint snaps always win). Persisted.
     property bool sketchSnapToGrid: !!fissionApp.setting("sketch/snapToGrid", true)
@@ -167,9 +169,51 @@ ApplicationWindow {
         showRender = false
         workspace = "manufacture"
         toolbar.tab = "MANUFACTURE"
+        showManufacture = true
+    }
+    function openManufacture(tab) {
+        enterManufactureWorkspace()
+        if (tab !== undefined && tab !== null) manufactureTab = tab
+        showManufacture = true
+    }
+    function mfgNewSetup() {
+        openManufacture(0)
+        if (!doc) return
+        const id = doc.addMfgItem("setups", {})
+        fissionApp.showMessage(id ? "Setup created — stock from body bounds" : (doc.lastError || "Setup failed"))
+    }
+    function mfgAddOp(type, name) {
+        openManufacture(2)
+        if (!doc) return
+        const mfg = doc.manufacture || {}
+        if (!mfg.activeSetupId) {
+            fissionApp.showMessage("Create a New Setup first")
+            manufactureTab = 0
+            return
+        }
+        const tools = mfg.tools || []
+        const id = doc.addMfgItem("operations", {
+            type: type, name: name || type, setupId: mfg.activeSetupId,
+            toolId: tools.length ? tools[0].id : ""
+        })
+        fissionApp.showMessage(id ? (name + " added") : (doc.lastError || "Operation failed"))
+    }
+    function mfgSimulate() {
+        openManufacture(3)
+        if (!doc) return
+        const mfg = doc.manufacture || {}
+        const ops = (mfg.operations || []).filter(o => o.setupId === mfg.activeSetupId)
+        if (!mfg.activeSetupId) { fissionApp.showMessage("No active setup to simulate"); return }
+        if (!ops.length) { fissionApp.showMessage("No operations on the active setup"); return }
+        fissionApp.showMessage("Simulate: " + ops.length + " operation(s) on active setup (placeholder)")
+    }
+    function mfgPostProcess() {
+        openManufacture(3)
+        mfgPostDialog.open()
     }
     function enterRenderWorkspace() {
         leaveDrawing()
+        showManufacture = false
         workspace = "render"
         liveRender = true
         toolbar.tab = "RENDER"
@@ -1542,6 +1586,23 @@ ApplicationWindow {
             cmd("Version History", "", "File", "any", () => openVersionHistory()),
             cmd("Recover Autosave", "", "File", "any", () => openRecoverAutosave()),
             cmd("Send to Slicer", "", "Manufacture", "model", () => sendToOrca()),
+            cmd("New Setup", "", "Manufacture", "model", () => mfgNewSetup()),
+            cmd("Tool Library", "", "Manufacture", "any", () => openManufacture(1)),
+            cmd("2D Adaptive", "", "Manufacture", "model", () => mfgAddOp("2d-adaptive", "2D Adaptive")),
+            cmd("2D Pocket", "", "Manufacture", "model", () => mfgAddOp("2d-pocket", "2D Pocket")),
+            cmd("2D Contour", "", "Manufacture", "model", () => mfgAddOp("2d-contour", "2D Contour")),
+            cmd("Face", "", "Manufacture", "model", () => mfgAddOp("face", "Face")),
+            cmd("Drill", "", "Manufacture", "model", () => mfgAddOp("drill", "Drill")),
+            cmd("3D Adaptive", "", "Manufacture", "model", () => mfgAddOp("3d-adaptive", "3D Adaptive")),
+            cmd("Parallel", "", "Manufacture", "model", () => mfgAddOp("parallel", "Parallel")),
+            cmd("Scallop", "", "Manufacture", "model", () => mfgAddOp("scallop", "Scallop")),
+            cmd("Facing", "", "Manufacture", "model", () => mfgAddOp("turning-face", "Facing")),
+            cmd("Profiling", "", "Manufacture", "model", () => mfgAddOp("turning-profile", "Profiling")),
+            cmd("Grooving", "", "Manufacture", "model", () => mfgAddOp("turning-groove", "Grooving")),
+            cmd("Parting", "", "Manufacture", "model", () => mfgAddOp("turning-part", "Parting")),
+            cmd("Simulate", "", "Manufacture", "model", () => mfgSimulate()),
+            cmd("Post Process", "", "Manufacture", "model", () => mfgPostProcess()),
+            cmd("Manufacture Panel", "", "Manufacture", "any", () => openManufacture()),
             cmd("Export", "", "File", "any", () => exportFile()),
             cmd("Undo", "Ctrl+Z", "Edit", "any", () => doc.undo()),
             cmd("Redo", "Ctrl+Y", "Edit", "any", () => doc.redo()),
@@ -1594,8 +1655,24 @@ ApplicationWindow {
     // ------------------------------------------------------------------ shortcuts
 
     // Fusion's default keyboard shortcuts. Single letters are ignored while a text field has focus.
-    Shortcut { sequences: [StandardKey.Undo]; onActivated: { viewportItem.cancelSketchInput(); win.doc.undo() } }
-    Shortcut { sequences: [StandardKey.Redo, "Ctrl+Y"]; onActivated: win.doc.redo() }
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        context: Qt.ApplicationShortcut
+        onActivated: { viewportItem.cancelSketchInput(); win.doc.undo() }
+    }
+    // Ctrl+Y is the Windows CAD default; also Ctrl+Shift+Z (macOS / some Qt StandardKey.Redo maps)
+    Shortcut {
+        sequences: ["Ctrl+Y", "Ctrl+Shift+Z", StandardKey.Redo]
+        context: Qt.ApplicationShortcut
+        onActivated: {
+            viewportItem.cancelSketchInput()
+            if (!win.doc || !win.doc.canRedo) {
+                fissionApp.showMessage("Nothing to redo")
+                return
+            }
+            win.doc.redo()
+        }
+    }
     Shortcut { sequences: [StandardKey.Save]; onActivated: win.saveOrSaveAs() }
     Shortcut { sequence: "Ctrl+Shift+S"; onActivated: win.saveAs() }
     Shortcut { sequences: [StandardKey.Open]; onActivated: win.openFile() }
@@ -1625,6 +1702,7 @@ ApplicationWindow {
             else if (win.commandFeatureId) win.finishCommand(false)
             else if (win.pickingSketchPlane) { win.pickingSketchPlane = false; win.pendingSketchTool = ""; win.selection.filter = "" }
             else if (win.showRender) win.showRender = false
+            else if (win.showManufacture) win.showManufacture = false
             else if (win.showAppearance) win.showAppearance = false
             else if (win.inspectMode) win.closeInspect()
             else win.selection.clear()
@@ -1795,7 +1873,7 @@ ApplicationWindow {
                         id: inspectFloat
                         app: win
                         width: 300
-                        visible: !win.commandFeatureId && !win.activeSketchId && !win.showAppearance && !win.showRender
+                        visible: !win.commandFeatureId && !win.activeSketchId && !win.showAppearance && !win.showRender && !win.showManufacture
                                  && win.inspectMode.length > 0
                         contentHeight: inspectLoader.item ? inspectLoader.item.implicitHeight + 2 : 200
                         Loader {
@@ -1829,6 +1907,23 @@ ApplicationWindow {
                             anchors.fill: parent
                             active: renderFloat.visible
                             sourceComponent: RenderDialog { app: win }
+                        }
+                    }
+                    FloatingPanel {
+                        id: manufactureFloat
+                        app: win
+                        width: 400
+                        visible: win.showManufacture && !win.commandFeatureId && !win.activeSketchId && !win.inDrawing
+                        contentHeight: manufactureLoader.item ? manufactureLoader.item.implicitHeight + 2 : 480
+                        Loader {
+                            id: manufactureLoader
+                            anchors.fill: parent
+                            active: manufactureFloat.visible
+                            sourceComponent: ManufactureDialog {
+                                app: win
+                                tabIndex: win.manufactureTab
+                                onTabIndexChanged: win.manufactureTab = tabIndex
+                            }
                         }
                     }
                 }
@@ -1865,6 +1960,18 @@ ApplicationWindow {
     property alias sheetRulesPopup: sheetRulesDialog
     BatchExportDialog { id: batchExport; app: win }
     readonly property alias batchExportDialog: batchExport
+    FileDialog {
+        id: mfgPostDialog
+        title: "Export NC program"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["NC / G-code (*.nc *.tap *.gcode)", "All files (*)"]
+        onAccepted: {
+            let path = fissionApp.toLocalPath(selectedFile.toString())
+            if (!path.toLowerCase().match(/\.(nc|tap|gcode)$/)) path += ".nc"
+            const out = doc.exportMfgGCode(path)
+            fissionApp.showMessage(out ? ("Posted → " + out) : (doc.lastError || "Post failed"))
+        }
+    }
     Loader {
         id: mcmasterLoader
         active: false
