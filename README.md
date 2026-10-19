@@ -88,7 +88,7 @@ Until CMake gains portable OCCT discovery, `MACOSX_BUNDLE` / `macdeployqt`, and 
 
 ## Fusion import
 
-The companion Fusion add-in lives in the sibling folder **`F3D_Bulk_Export/`** (Python + `.manifest`). Install it in Fusion 360, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
+The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). Install it in Fusion 360, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
 
 ## Roadmap status
 
