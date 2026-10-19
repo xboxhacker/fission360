@@ -16,6 +16,9 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.20 — 2026-10-19: fix missing OCCT DLLs in Windows release
+- Windows zip was missing `TKBRep.dll` (and related OCCT libs) because CMake copied from an incomplete `dep_OCCT-build/bin/occt` tree. Deploy now prefers `OrcaSlicer_dep/usr/local/bin/occt` (full runtime) and also copies `freetype.dll`.
+- `scripts/package-windows.ps1` refuses to ship without `TKBRep.dll` and backfills from `FISSION_ORCA_ROOT` if needed.
 ### 1.13.19 — 2026-10-19: cleanup + Windows GitHub Release
 - Removed root clutter: old `build*_log.txt` / `fission_build*.txt` / `occt_*.txt` dumps, `aqt`/smoke logs, duplicate `shot_*.png` (README screenshot remains `docs/screenshot.png`), empty `uitest/` and `docs/external_edits/`.
 - Tightened `.gitignore`. Wiped `build-rel/`/`dist/` earlier, then rebuilt and published `Fission360-1.13.19-windows-x64.zip` to https://github.com/xboxhacker/fission360/releases/tag/v1.13.19

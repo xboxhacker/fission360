@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Fission360 VERSION 1.13.19 LANGUAGES CXX)
+project(Fission360 VERSION 1.13.20 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -212,49 +212,43 @@ qt_add_resources(Fission360 "fission_qml"
 # ---------------------------------------------------------------------------
 # Deployment
 # ---------------------------------------------------------------------------
-# Only DLLs that actually ship with this OCCT build (Bool/Feat are compiled in as OBJECT libs)
-set(OCCT_RUNTIME_DLLS
-    "${OCCT_DIR}/bin/occt/TKernel.dll"
-    "${OCCT_DIR}/bin/occt/TKG2d.dll"
-    "${OCCT_DIR}/bin/occt/TKG3d.dll"
-    "${OCCT_DIR}/bin/occt/TKMath.dll"
-    "${OCCT_DIR}/bin/occt/TKBRep.dll"
-    "${OCCT_DIR}/bin/occt/TKGeomBase.dll"
-    "${OCCT_DIR}/bin/occt/TKGeomAlgo.dll"
-    "${OCCT_DIR}/bin/occt/TKMesh.dll"
-    "${OCCT_DIR}/bin/occt/TKPrim.dll"
-    "${OCCT_DIR}/bin/occt/TKTopAlgo.dll"
-    "${OCCT_DIR}/bin/occt/TKBO.dll"
-    "${OCCT_DIR}/bin/occt/TKHLR.dll"
-    "${OCCT_DIR}/bin/occt/TKShHealing.dll"
-    "${OCCT_DIR}/bin/occt/TKOffset.dll"
-    "${OCCT_DIR}/bin/occt/TKFillet.dll"
-    "${OCCT_DIR}/bin/occt/TKSTEP.dll"
-    "${OCCT_DIR}/bin/occt/TKSTEPBase.dll"
-    "${OCCT_DIR}/bin/occt/TKSTEPAttr.dll"
-    "${OCCT_DIR}/bin/occt/TKSTEP209.dll"
-    "${OCCT_DIR}/bin/occt/TKIGES.dll"
-    "${OCCT_DIR}/bin/occt/TKXSBase.dll"
-    "${OCCT_DIR}/bin/occt/TKXCAF.dll"
-    "${OCCT_DIR}/bin/occt/TKLCAF.dll"
-    "${OCCT_DIR}/bin/occt/TKCAF.dll"
-    "${OCCT_DIR}/bin/occt/TKCDF.dll"
-    "${OCCT_DIR}/bin/occt/TKXDESTEP.dll"
-    "${OCCT_DIR}/bin/occt/TKXDEIGES.dll"
-    "${OCCT_DIR}/bin/occt/TKSTL.dll"
-)
-set(_occt_copy "")
-foreach(_dll ${OCCT_RUNTIME_DLLS})
-    if(EXISTS "${_dll}")
-        list(APPEND _occt_copy "${_dll}")
+# The dep_OCCT-build/bin/occt tree is incomplete (no TKBRep.dll etc.) while other OCCT DLLs
+# still import those libraries. Prefer the full OrcaSlicer_dep OCCT runtime; fall back to build bin.
+set(OCCT_RUNTIME_DIR "")
+foreach(_cand
+        "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/occt"
+        "${FISSION_ORCA_ROOT}/OrcaSlicer_dep/usr/local/bin/occt"
+        "${OCCT_DIR}/bin/occt")
+    if(EXISTS "${_cand}/TKBRep.dll")
+        set(OCCT_RUNTIME_DIR "${_cand}")
+        break()
     endif()
 endforeach()
+if(NOT OCCT_RUNTIME_DIR)
+    set(OCCT_RUNTIME_DIR "${OCCT_DIR}/bin/occt")
+    message(WARNING "Complete OCCT runtime (with TKBRep.dll) not found; using ${OCCT_RUNTIME_DIR}")
+endif()
+file(GLOB _occt_copy "${OCCT_RUNTIME_DIR}/*.dll")
+# FreeType is required by some OCCT / Qt paths at runtime
+set(_freetype_dll "")
+foreach(_cand
+        "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/freetype.dll"
+        "${FISSION_ORCA_ROOT}/dist/MyOrcaSlicer-portable/freetype.dll"
+        "${FISSION_ORCA_ROOT}/build-portable/src/Release/freetype.dll")
+    if(EXISTS "${_cand}")
+        set(_freetype_dll "${_cand}")
+        break()
+    endif()
+endforeach()
+if(_freetype_dll)
+    list(APPEND _occt_copy "${_freetype_dll}")
+endif()
 
 add_custom_command(TARGET Fission360 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_occt_copy} $<TARGET_FILE_DIR:Fission360>
     COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-translations --no-compiler-runtime
             --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/assets/qml" $<TARGET_FILE:Fission360>
-    COMMENT "Deploying OCCT and Qt runtime"
+    COMMENT "Deploying OCCT and Qt runtime from ${OCCT_RUNTIME_DIR}"
     VERBATIM
 )
 
