@@ -1,0 +1,13 @@
+{
+	"autodeskProduct": "Fusion360",
+	"type": "addin",
+	"id": "F3D_Bulk_Export",
+	"author": "Fission 360",
+	"description": {
+		"": "Bulk export designs from the Data Panel to .f360 format for Fission 360"
+	},
+	"version": "1.6.0",
+	"runOnStartup": false,
+	"supportedOS": "windows|mac",
+	"editEnabled": true
+}

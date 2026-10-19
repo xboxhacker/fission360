@@ -1,0 +1,3 @@
+module FissionRender
+AppearanceDialog 1.0 AppearanceDialog.qml
+RenderDialog 1.0 RenderDialog.qml

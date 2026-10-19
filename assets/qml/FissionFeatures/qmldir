@@ -1,0 +1,15 @@
+FeaturePanel 1.0 FeaturePanel.qml
+FeatureDialog 1.0 FeatureDialog.qml
+NumberField 1.0 NumberField.qml
+ChoiceField 1.0 ChoiceField.qml
+ExtrudeDialog 1.0 ExtrudeDialog.qml
+RevolveDialog 1.0 RevolveDialog.qml
+FilletDialog 1.0 FilletDialog.qml
+ChamferDialog 1.0 ChamferDialog.qml
+ShellDialog 1.0 ShellDialog.qml
+LoftDialog 1.0 LoftDialog.qml
+SweepDialog 1.0 SweepDialog.qml
+MirrorDialog 1.0 MirrorDialog.qml
+PatternDialog 1.0 PatternDialog.qml
+ConstructionDialog 1.0 ConstructionDialog.qml
+SpecDialog 1.0 SpecDialog.qml

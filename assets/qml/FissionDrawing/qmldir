@@ -1,0 +1,4 @@
+module FissionDrawing
+DrawingWorkspace 1.0 DrawingWorkspace.qml
+DrawingViewItem 1.0 DrawingViewItem.qml
+CreateDrawingDialog 1.0 CreateDrawingDialog.qml

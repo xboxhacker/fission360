@@ -1,0 +1,170 @@
+# Sketch: multi-platform release. See docs/ci-release-sketch.md
+# Windows may become real first; macOS/Linux stay disabled until CMake is Unix-ready.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Comma list: windows,macos,linux (sketch ignores unknown)"
+        default: "windows"
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: "6.8.2"
+  # When OCCT is cached as a release asset or actions cache, set the key here.
+  OCCT_CACHE_KEY: "occt-7.6-sketch"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    # Flip to true once Qt+OCCT caches exist on this repo's Actions.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt (aqt)
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2022_64 `
+            --outputdir ${{ github.workspace }}/Qt `
+            -m qtwebengine
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/msvc2022_64" >> $env:GITHUB_ENV
+
+      - name: Restore OCCT (TODO)
+        run: |
+          Write-Error @"
+          Sketch only: download or build OCCT 7.6 and set OCCT_ROOT or FISSION_ORCA_ROOT.
+          See docs/ci-release-sketch.md section 3.
+          "@
+
+      - name: Configure & build
+        run: |
+          cmake -S . -B build-rel -DCMAKE_PREFIX_PATH="$env:CMAKE_PREFIX_PATH" -DFISSION_ORCA_ROOT="$env:FISSION_ORCA_ROOT"
+          cmake --build build-rel --config Release --target Fission360
+
+      - name: Self-test
+        run: .\build-rel\Release\Fission360.exe --selftest
+
+      - name: Package
+        run: powershell -File scripts/package-windows.ps1 -BuildDir build-rel\Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fission360-windows-x64
+          path: dist/Fission360-*-windows-x64.zip
+
+  # ---------------------------------------------------------------------------
+  macos:
+    name: macOS (arm64 sketch)
+    runs-on: macos-14
+    if: false   # enable after CMake MACOSX_BUNDLE + OCCT Unix discovery
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt (aqt)
+        run: |
+          pip install aqtinstall
+          aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 \
+            --outputdir "${{ github.workspace }}/Qt" \
+            -m qtwebengine
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/macos" >> "$GITHUB_ENV"
+          # Note: exact kit folder name varies by aqt; adjust after first dry-run.
+
+      - name: Restore OCCT (TODO)
+        run: |
+          echo "Sketch: provide OCCT_ROOT with lib/include for macOS arm64"
+          exit 1
+
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+            -DOCCT_ROOT="$OCCT_ROOT"
+          cmake --build build --target Fission360 --parallel
+
+      - name: Self-test
+        run: ./build/Fission360.app/Contents/MacOS/Fission360 --selftest || ./build/Fission360 --selftest
+
+      - name: Package
+        run: bash scripts/package-macos.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fission360-macos-arm64
+          path: dist/Fission360-*-macos-*.zip
+
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Linux x64 (sketch)
+    runs-on: ubuntu-22.04
+    if: false   # enable after CMake OpenGL/OCCT Unix + linuxdeploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build \
+            libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0 xvfb
+
+      - name: Install Qt (aqt)
+        run: |
+          pip install aqtinstall
+          aqt install-qt linux desktop ${{ env.QT_VERSION }} linux_gcc_64 \
+            --outputdir "${{ github.workspace }}/Qt" \
+            -m qtwebengine
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/${{ env.QT_VERSION }}/gcc_64" >> "$GITHUB_ENV"
+
+      - name: Restore OCCT (TODO)
+        run: |
+          echo "Sketch: provide OCCT_ROOT or build OCCT 7.6 into the cache"
+          exit 1
+
+      - name: Configure & build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH" \
+            -DOCCT_ROOT="$OCCT_ROOT"
+          cmake --build build --target Fission360
+
+      - name: Self-test
+        run: xvfb-run -a ./build/Fission360 --selftest
+
+      - name: Package
+        run: bash scripts/package-linux.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fission360-linux-x64
+          path: |
+            dist/Fission360-*-linux-*.AppImage
+            dist/Fission360-*-linux-*.tar.gz
+
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Attach to GitHub Release
+    needs: [windows, macos, linux]
+    if: false   # enable when at least one platform job is real and on tags
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

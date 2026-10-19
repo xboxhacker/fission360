@@ -1,0 +1,2 @@
+// Icon 0 of the exe: the window, taskbar and .f360 file type icon
+IDI_APP ICON "../assets/icons/fission360.ico"

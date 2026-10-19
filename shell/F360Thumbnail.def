@@ -1,0 +1,4 @@
+LIBRARY Fission360Thumbs
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
