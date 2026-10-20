@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QStandardPaths>
 #include <algorithm>
 
@@ -22,7 +23,7 @@ void DocumentVersionStore::setMaxVersions(int n) {
     m_maxVersions = std::clamp(n, 1, 50);
 }
 
-QString DocumentVersionStore::versionsDirFor(const QString &designPath) const {
+QString DocumentVersionStore::versionsDirFor(const QString &designPath) {
     if (designPath.isEmpty()) return {};
     return designPath + QStringLiteral(".versions");
 }
@@ -37,62 +38,78 @@ QString DocumentVersionStore::autosavePathFor(const QString &documentId) const {
     return QDir(autosaveDir()).filePath(documentId + QStringLiteral(".f360.autosave"));
 }
 
-int DocumentVersionStore::pushVersion(const QString &designPath, int versionNumber, const QByteArray &jsonUtf8,
-                                      const QString &label) {
-    if (designPath.isEmpty() || versionNumber < 1 || jsonUtf8.isEmpty()) return 0;
-    const QString dir = versionsDirFor(designPath);
-    if (!QDir().mkpath(dir)) return 0;
-    const QString path = QDir(dir).filePath(QStringLiteral("v%1.f360z").arg(versionNumber, 4, 10, QChar('0')));
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return 0;
-    // Lightweight: qCompress (zlib) — no second copy of the live file
-    f.write(qCompress(jsonUtf8, 6));
-    f.close();
-
-    QJsonObject meta{{"version", versionNumber},
-                     {"label", label},
-                     {"savedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
-                     {"bytes", jsonUtf8.size()}};
-    QFile mf(QDir(dir).filePath(QStringLiteral("v%1.meta.json").arg(versionNumber, 4, 10, QChar('0'))));
-    if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        mf.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
-
-    // Cap history
-    const QVariantList all = listVersions(designPath);
-    for (int i = 0; i < all.size() - m_maxVersions; ++i)
-        deleteVersion(designPath, all[i].toMap().value(QStringLiteral("version")).toInt());
-    return versionNumber;
+QJsonObject DocumentVersionStore::makeHistoryEntry(int versionNumber, const QByteArray &designJsonUtf8,
+                                                   const QString &label) {
+    if (versionNumber < 1 || designJsonUtf8.isEmpty()) return {};
+    return QJsonObject{{QStringLiteral("version"), versionNumber},
+                       {QStringLiteral("label"), label.isEmpty() ? QStringLiteral("v%1").arg(versionNumber) : label},
+                       {QStringLiteral("savedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                       {QStringLiteral("bytes"), designJsonUtf8.size()},
+                       {QStringLiteral("payload"), QString::fromLatin1(qCompress(designJsonUtf8, 6).toBase64())}};
 }
 
-QVariantList DocumentVersionStore::listVersions(const QString &designPath) const {
+QByteArray DocumentVersionStore::payloadFromEntry(const QJsonObject &entry) {
+    const QByteArray b64 = entry.value(QStringLiteral("payload")).toString().toLatin1();
+    if (b64.isEmpty()) return {};
+    return qUncompress(QByteArray::fromBase64(b64));
+}
+
+QVariantList DocumentVersionStore::historyMetaList(const QJsonArray &history) {
     QVariantList out;
-    const QDir dir(versionsDirFor(designPath));
-    if (!dir.exists()) return out;
-    const QStringList metas = dir.entryList({QStringLiteral("v*.meta.json")}, QDir::Files, QDir::Name);
-    for (const QString &name : metas) {
-        QFile f(dir.filePath(name));
-        if (!f.open(QIODevice::ReadOnly)) continue;
-        const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-        if (o.contains(QStringLiteral("version")))
-            out.append(o.toVariantMap());
+    for (const QJsonValue &v : history) {
+        const QJsonObject o = v.toObject();
+        if (!o.contains(QStringLiteral("version"))) continue;
+        out.append(QVariantMap{{QStringLiteral("version"), o.value(QStringLiteral("version")).toInt()},
+                               {QStringLiteral("label"), o.value(QStringLiteral("label")).toString()},
+                               {QStringLiteral("savedAt"), o.value(QStringLiteral("savedAt")).toString()},
+                               {QStringLiteral("bytes"), o.value(QStringLiteral("bytes")).toInt()}});
     }
     return out;
 }
 
-QByteArray DocumentVersionStore::loadVersion(const QString &designPath, int versionNumber) const {
-    const QString path = QDir(versionsDirFor(designPath))
-                             .filePath(QStringLiteral("v%1.f360z").arg(versionNumber, 4, 10, QChar('0')));
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) return {};
-    return qUncompress(f.readAll());
+bool DocumentVersionStore::migrateSidecarInto(const QString &designPath, QJsonArray &history, int maxVersions) {
+    const QDir dir(versionsDirFor(designPath));
+    if (!dir.exists()) return false;
+    QSet<int> have;
+    for (const QJsonValue &v : history)
+        have.insert(v.toObject().value(QStringLiteral("version")).toInt());
+
+    bool imported = false;
+    const QStringList metas = dir.entryList({QStringLiteral("v*.meta.json")}, QDir::Files, QDir::Name);
+    for (const QString &name : metas) {
+        QFile mf(dir.filePath(name));
+        if (!mf.open(QIODevice::ReadOnly)) continue;
+        const QJsonObject meta = QJsonDocument::fromJson(mf.readAll()).object();
+        const int ver = meta.value(QStringLiteral("version")).toInt();
+        if (ver < 1 || have.contains(ver)) continue;
+        const QString stem = QStringLiteral("v%1").arg(ver, 4, 10, QChar('0'));
+        QFile zf(dir.filePath(stem + QStringLiteral(".f360z")));
+        if (!zf.open(QIODevice::ReadOnly)) continue;
+        const QByteArray raw = qUncompress(zf.readAll());
+        if (raw.isEmpty()) continue;
+        QJsonObject entry = makeHistoryEntry(ver, raw, meta.value(QStringLiteral("label")).toString());
+        if (meta.contains(QStringLiteral("savedAt")))
+            entry.insert(QStringLiteral("savedAt"), meta.value(QStringLiteral("savedAt")));
+        history.append(entry);
+        have.insert(ver);
+        imported = true;
+    }
+    // Keep chronological order and cap
+    QList<QJsonObject> sorted;
+    for (const QJsonValue &v : history) sorted.append(v.toObject());
+    std::sort(sorted.begin(), sorted.end(), [](const QJsonObject &a, const QJsonObject &b) {
+        return a.value(QStringLiteral("version")).toInt() < b.value(QStringLiteral("version")).toInt();
+    });
+    while (sorted.size() > maxVersions) sorted.removeFirst();
+    history = QJsonArray();
+    for (const QJsonObject &o : sorted) history.append(o);
+    return imported;
 }
 
-bool DocumentVersionStore::deleteVersion(const QString &designPath, int versionNumber) {
-    const QDir dir(versionsDirFor(designPath));
-    const QString stem = QStringLiteral("v%1").arg(versionNumber, 4, 10, QChar('0'));
-    bool ok = QFile::remove(dir.filePath(stem + QStringLiteral(".f360z")));
-    QFile::remove(dir.filePath(stem + QStringLiteral(".meta.json")));
-    return ok;
+bool DocumentVersionStore::removeSidecar(const QString &designPath) {
+    const QString dir = versionsDirFor(designPath);
+    if (dir.isEmpty() || !QDir(dir).exists()) return false;
+    return QDir(dir).removeRecursively();
 }
 
 bool DocumentVersionStore::writeAutosave(const QString &documentId, const QByteArray &jsonUtf8,
@@ -102,7 +119,6 @@ bool DocumentVersionStore::writeAutosave(const QString &documentId, const QByteA
     const QString path = autosavePathFor(documentId);
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    // Small header JSON line then compressed body — recovery without loading huge files twice
     QJsonObject header{{"documentId", documentId},
                        {"name", displayName},
                        {"originalPath", originalPath},

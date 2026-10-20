@@ -16,6 +16,12 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.33 — Shell frustum punch fallback + versions inside .f360
+- **Shell**: unify coplanar faces first; more complete-intersection retries; accept volume-correct results after `ShapeFix` even when `BRepCheck` complains; fallback hollows by solid-offset cut then punches opening faces through the wall (fixes 45° face-extrude frustum shells that still failed after 1.13.31).
+- Selftest: user recipe — box + 45° face extrude + shell sloped face 2 mm inside.
+- **Version history** is embedded in the `.f360` as a compressed `history` array (no `<file>.f360.versions/` sidecar). Legacy sidecars are imported on open/save and removed after a successful save. Autosave stays in AppData.
+- **INSERT ribbon**: captions show **Mesh** / **STEP** / **McMaster** (tooltips keep the full names). McMaster gets its own catalog glyph so it no longer looks identical to STEP import.
+
 ### 1.13.32 — Report Bug + SolidCraft issue parity tests
 - **Report Bug** in the top command bar (bug glyph), File menu, Help command search, INSPECT / UTILITIES: opens a GitHub new-issue form for `xboxhacker/fission360` with version, OS, last status, and unhealthy feature errors pre-filled.
 - **Selftest** `testSolidCraftParity`: geometry recipes inspired by public SolidCraft kernel issues (#3541 loft, #3578/#3526 combine, #3528 revolve seam cut, #3573 taper+fillet shell, #3561/#3587 oversized blends, #3563 extrude join/through-all). See `docs/solidcraft-issue-parity.md`.

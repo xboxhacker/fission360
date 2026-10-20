@@ -24,9 +24,26 @@ Rectangle {
     // {text, glyph, tip, run, checked}            calls run(); checked() highlights it
     // {text, glyph, planned: "Phase N"}            listed but not available yet
     // "-"                                          menu separator
-    function cmd(text, glyph, type, extra, tip) { return { text: text, glyph: glyph, type: type, extra: extra, tip: tip || text } }
-    function act(text, glyph, run, tip, checked) { return { text: text, glyph: glyph, run: run, tip: tip || text, checked: checked } }
+    function cmd(text, glyph, type, extra, tip, shortLabel) {
+        return { text: text, glyph: glyph, type: type, extra: extra, tip: tip || text, short: shortLabel || "" }
+    }
+    function act(text, glyph, run, tip, checked, shortLabel) {
+        return { text: text, glyph: glyph, run: run, tip: tip || text, checked: checked, short: shortLabel || "" }
+    }
     function planned(text, glyph, phase) { return { text: text, glyph: glyph || "comingsoon", planned: phase } }
+    // Ribbon captions are tight: prefer an explicit short label, else avoid collapsing "Insert …" to just "Insert"
+    function ribbonCaption(it) {
+        if (!it || !it.text) return ""
+        if (it.short) return it.short
+        if (it.text.length <= 10) return it.text
+        const parts = it.text.split(/\s+/).filter(p => p && p !== "/")
+        if (parts.length > 1 && ["Insert", "Create", "Export", "Open"].indexOf(parts[0]) >= 0) {
+            const rest = parts.slice(1).join(" ")
+            if (rest.length <= 10) return rest
+            return parts[parts.length - 1]
+        }
+        return parts[0]
+    }
 
     function runItem(it) {
         if (!it || it === "-") return
@@ -199,9 +216,12 @@ Rectangle {
             constructGroup,
             inspectGroup,
             { title: "INSERT", quick: 3, items: [
-                act("Insert Mesh", "insertmesh", () => app.insertMesh(), "Insert Mesh: STL or OBJ file"),
-                act("Insert STEP / IGES", "importcad", () => app.importCAD(), "Insert a STEP or IGES file as solid bodies"),
-                act("Insert McMaster-Carr", "importcad", () => app.insertMcMaster(), "Search McMaster-Carr and insert a STEP part"),
+                act("Insert Mesh", "insertmesh", () => app.insertMesh(),
+                    "Insert Mesh: STL or OBJ file", undefined, "Mesh"),
+                act("Insert STEP / IGES", "importcad", () => app.importCAD(),
+                    "Insert a STEP or IGES file as solid bodies", undefined, "STEP"),
+                act("Insert McMaster-Carr", "mcmaster", () => app.insertMcMaster(),
+                    "Search McMaster-Carr and insert a STEP part", undefined, "McMaster"),
                 act("Export", "export", () => app.exportFile(), "Export STEP / IGES / STL / OBJ / 3MF"),
                 act("Batch Export", "export", () => app.openBatchExport(), "Batch Export: several bodies and formats into a folder"),
                 act("Export Face as DXF", "dxf", () => app.exportDxf(), "Export a picked planar face as a DXF outline")
@@ -525,7 +545,7 @@ Rectangle {
                     || !toolbar.hidden.includes(toolbar.tab + "|" + dg.group.title + "|" + t.text))
                 ToolbarButton {
                     required property var modelData
-                    text: modelData.text.length > 10 ? modelData.text.split(" ")[0] : modelData.text
+                    text: toolbar.ribbonCaption(modelData)
                     glyph: modelData.glyph
                     tip: modelData.planned ? modelData.text + " (planned: " + modelData.planned + ")" : modelData.tip
                     checked: modelData.checked ? (toolbar.app.rev, toolbar.app.selectionTool, toolbar.app.showProperties,

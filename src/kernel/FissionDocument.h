@@ -3,6 +3,7 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QHash>
@@ -23,7 +24,7 @@ class FissionDocument : public QObject {
     Q_PROPERTY(QString documentId READ documentId CONSTANT)
     // Monotonic content stamp — drawings & renders compare against this to know if they are out of date
     Q_PROPERTY(qint64 contentRevision READ contentRevision NOTIFY contentRevisionChanged)
-    // Named save version (1, 2, …) — bumped on each explicit Save; used by DocumentVersionStore
+    // Named save version (1, 2, …) — bumped on each explicit Save; snapshots live in the .f360 "history" array
     Q_PROPERTY(int versionNumber READ versionNumber NOTIFY versionNumberChanged)
     // Linked outputs: [{kind:"drawing"|"render", id, name, path, sourceRevision, outOfDate}]
     Q_PROPERTY(QVariantList linkedAssets READ linkedAssets NOTIFY linkedAssetsChanged)
@@ -310,6 +311,7 @@ private:
     int m_rebuildCount = 0;
     QVariantList m_analyses;
     QVariantMap m_manufacture;
+    QJsonArray m_history;   // embedded version snapshots inside the .f360 file
     QList<QJsonObject> m_undo, m_redo;
     QString m_lastError;
     bool m_importCADBusy = false;

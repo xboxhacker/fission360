@@ -852,21 +852,27 @@ bool FissionDocument::anyLinkedAssetOutOfDate() const {
 }
 
 QByteArray FissionDocument::snapshotJsonForHistory() const {
-    // Versions skip the embedded thumbnail to stay light on disk
+    // Versions skip thumbnail and nested history so undo / autosave stay light
     return QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
 }
 
 QVariantList FissionDocument::versionHistory() const {
-    if (m_filePath.isEmpty()) return {};
-    return DocumentVersionStore::instance()->listVersions(m_filePath);
+    return DocumentVersionStore::historyMetaList(m_history);
 }
 
 bool FissionDocument::revertToVersion(int versionNumber) {
-    if (m_filePath.isEmpty() || versionNumber < 1) {
+    if (versionNumber < 1) {
         m_lastError = QStringLiteral("No saved version to revert to");
         return false;
     }
-    const QByteArray raw = DocumentVersionStore::instance()->loadVersion(m_filePath, versionNumber);
+    QByteArray raw;
+    for (const QJsonValue &v : m_history) {
+        const QJsonObject e = v.toObject();
+        if (e.value(QStringLiteral("version")).toInt() == versionNumber) {
+            raw = DocumentVersionStore::payloadFromEntry(e);
+            break;
+        }
+    }
     if (raw.isEmpty()) {
         m_lastError = QStringLiteral("Could not load version %1").arg(versionNumber);
         return false;
@@ -878,16 +884,18 @@ bool FissionDocument::revertToVersion(int versionNumber) {
     }
     checkpoint();
     const qint64 prevRev = m_contentRevision;
+    const QJsonArray keepHistory = m_history;   // snapshots stay in the live file; do not replace with old empty history
     m_restoring = true;
     fromJson(obj);
+    m_history = keepHistory;
     m_restoring = false;
     // Snapshot may carry an older contentRevision — advance past the pre-revert stamp so links go stale
     m_contentRevision = prevRev;
     bumpContentRevision();
-            m_modified = true;
-            emit modifiedChanged();
-            return true;
-        }
+    m_modified = true;
+    emit modifiedChanged();
+    return true;
+}
 
 bool FissionDocument::writeAutosaveNow() {
     return DocumentVersionStore::instance()->writeAutosave(
@@ -1559,6 +1567,9 @@ void FissionDocument::fromJson(const QJsonObject &obj) {
     emit manufactureChanged();
     if (m_renderSettings && obj.contains("render"))
         m_renderSettings->fromJson(obj["render"].toObject().toVariantMap());
+    // Only replace when the object carries history (disk load). Undo checkpoints omit it so history stays.
+    if (obj.contains(QStringLiteral("history")))
+        m_history = obj.value(QStringLiteral("history")).toArray();
     emit parametersChanged();
 }
 
@@ -1585,7 +1596,27 @@ bool FissionDocument::save(const QString &path) {
     FissionProgress::report(QStringLiteral("save"), 0.05, QStringLiteral("Serializing…"));
     pump();
 
-    const QJsonObject root = toJson();
+    // Fold any legacy "<file>.f360.versions/" sidecar into memory before writing the single-file history
+    DocumentVersionStore::migrateSidecarInto(path, m_history, DocumentVersionStore::instance()->maxVersions());
+
+    const QByteArray designSnap = snapshotJsonForHistory();
+    QJsonObject entry = DocumentVersionStore::makeHistoryEntry(
+        m_versionNumber, designSnap, QStringLiteral("v%1").arg(m_versionNumber));
+    // Replace same version number if re-saving, else append
+    bool replaced = false;
+    for (int i = 0; i < m_history.size(); ++i) {
+        if (m_history.at(i).toObject().value(QStringLiteral("version")).toInt() == m_versionNumber) {
+            m_history.replace(i, entry);
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) m_history.append(entry);
+    while (m_history.size() > DocumentVersionStore::instance()->maxVersions())
+        m_history.removeAt(0);
+
+    QJsonObject root = toJson();
+    root.insert(QStringLiteral("history"), m_history);
     FissionProgress::report(QStringLiteral("save"), 0.35, QStringLiteral("Encoding…"));
     pump();
 
@@ -1631,10 +1662,7 @@ bool FissionDocument::save(const QString &path) {
 
     FissionProgress::report(QStringLiteral("save"), 0.92, QStringLiteral("Version history…"));
     pump();
-    // Reuse the Compact payload (no thumbnail) — do not call toJson() again
-    DocumentVersionStore::instance()->pushVersion(
-        m_filePath, m_versionNumber, compact,
-        QStringLiteral("v%1").arg(m_versionNumber));
+    DocumentVersionStore::removeSidecar(path);   // history now lives inside the .f360
     DocumentVersionStore::instance()->clearAutosave(m_documentId);
     FissionProgress::end(QStringLiteral("save"));
     return true;
@@ -2104,6 +2132,10 @@ bool FissionDocument::load(const QString &path) {
             return false;
         }
         fromJson(root);
+        // Fold legacy sidecar history into the in-memory document (written into the .f360 on next Save)
+        if (DocumentVersionStore::migrateSidecarInto(path, m_history,
+                                                       DocumentVersionStore::instance()->maxVersions()))
+            m_modified = true;
     } catch (const std::bad_alloc &) {
         m_lastError = QStringLiteral("Out of memory opening this design — try a machine with more RAM, or re-export without per-step BRep snapshots");
         clearContent();

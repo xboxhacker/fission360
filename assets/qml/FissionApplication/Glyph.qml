@@ -663,6 +663,15 @@ Item {
             poly(c, [[19, 2], [19, 12]], false, false); poly(c, [[15.5, 8.5], [19, 12], [22.5, 8.5]], false, false)
             poly(c, [[14, 21], [22, 21]], false, false)
             break
+        case "mcmaster":
+            // Catalog / part insert: document with search mark (distinct from STEP importcad)
+            poly(c, [[4, 3], [14, 3], [16, 5], [16, 21], [4, 21]], true, true)
+            poly(c, [[7, 8], [13, 8]], false, false)
+            poly(c, [[7, 11], [13, 11]], false, false)
+            poly(c, [[7, 14], [11, 14]], false, false)
+            circle(c, 17.5, 16.5, 3.5, false)
+            poly(c, [[20, 19], [23, 22]], false, false)
+            break
         case "script":
             poly(c, [[5, 3], [17, 3], [19, 5], [19, 21], [5, 21]], true, true)
             poly(c, [[9, 9], [7, 11.5], [9, 14]], false, false); poly(c, [[15, 9], [17, 11.5], [15, 14]], false, false)

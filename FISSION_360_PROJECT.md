@@ -34,7 +34,7 @@ fission360/
 │   │   ├── FissionDocument.h/cpp      # bodies, timeline, parameters, save/load, export, undo,
 │   │   │                              # documentId / contentRevision, linkedAssets, version revert;
 │   │   │                              # save = Compact JSON once, chunked write + FissionProgress
-│   │   ├── DocumentVersionStore.h/cpp # sidecar .f360.versions/ history + AppData autosave
+│   │   ├── DocumentVersionStore.h/cpp # embedded .f360 history helpers + AppData autosave (+ legacy sidecar migrate)
 │   │   ├── FissionTimeline.h/cpp
 │   │   ├── FissionFeature.h/cpp       # base class: props, rebuild, drag-handle (manipulator) data
 │   │   ├── FissionBody.h/cpp
@@ -177,8 +177,8 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - A self-test or UI-test process left running locks the exe and the next link fails with LNK1104: `Get-Process Fission360 | Stop-Process -Force` before building, and start test runs with a timeout (`$p.WaitForExit(300000)`)
 
 ## Current State
-*(Source at version **1.13.32** — Report Bug + SolidCraft issue-parity selftests; 1.13.31 Shell complete-intersection retry; 1.13.30 update check / PNG / grid (+ MCP from 1.13.29).
-- **Version 1.13.32** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
+*(Source at version **1.13.33** — Shell frustum punch fallback + version history inside `.f360`; 1.13.32 Report Bug / SolidCraft parity; 1.13.31 Shell complete-intersection.
+- **Version 1.13.33** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
 - **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
@@ -430,7 +430,7 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - [x] `.f360` file format
 - [x] **Design linkage** — `documentId` + `contentRevision`; drawings / renders in `linkedAssets` with out-of-date flags; **Update from Design** restamps drawings
 - [x] **Linked design inserts** — drag a design from Projects (or a `.f360` from Explorer) onto the viewport, or Projects ▸ right-click ▸ Insert into Current Design. Stored as an `ImportCAD` feature with `link = {path, documentId, revision, name}` (`FissionLinkedDesign.cpp`). A 4 s check compares the source file's saved `contentRevision` (read from the file head, cached by file time) and prompts **Update / Not Now**; browser **Linked Designs** folder: Update from Original, Open Original, **Unlink** (keeps the bodies, never asks again), Delete Insert *(1.13.12)*
-- [x] **Internal version history** — compressed snapshots beside the file (`DocumentVersionStore`); File ▸ Version History / Revert
+- [x] **Internal version history** — compressed snapshots inside the `.f360` `history` array (`DocumentVersionStore`); File ▸ Version History / Revert; legacy `.versions` sidecars migrate on open/save
 - [x] **Autosave** — AppData crash recovery timer; File ▸ Recover Autosave; interval in Display Settings
 - [x] **UI walkthrough GIF** — `--uitest` exports `walkthrough.gif` via `GifWriter`
 - [x] **Large Fusion timeline open** — lazy per-step STEP decode; only the marker’s last snapshot is applied (avoids OOM on 100MB+ exports)

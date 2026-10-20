@@ -5,31 +5,33 @@
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QJsonArray>
 
-// Sidecar version history + crash autosave for .f360 designs.
-// Versions live next to the file in "<name>.f360.versions/" (capped, compressed) so the
-// main file stays small and low-end disks aren't filled. Autosave lives under AppData.
+// Crash autosave under AppData, plus helpers for version history embedded inside .f360 files.
+// Older builds wrote "<path>.f360.versions/" sidecars — migrateSidecarIntoFile() folds those in.
 class DocumentVersionStore : public QObject {
     Q_OBJECT
 public:
     static DocumentVersionStore *instance();
 
-    // Directory next to a saved design that holds v0001.f360 … (qCompress payloads)
-    Q_INVOKABLE QString versionsDirFor(const QString &designPath) const;
     Q_INVOKABLE QString autosaveDir() const;
     Q_INVOKABLE QString autosavePathFor(const QString &documentId) const;
 
-    // Keep at most this many named versions per design (oldest dropped). Default 8 — light on disk.
+    // Keep at most this many named versions per design (oldest dropped). Default 8.
     Q_INVOKABLE int maxVersions() const { return m_maxVersions; }
     Q_INVOKABLE void setMaxVersions(int n);
 
-    // Write a version snapshot (compressed JSON bytes). Returns version number or 0 on failure.
-    Q_INVOKABLE int pushVersion(const QString &designPath, int versionNumber, const QByteArray &jsonUtf8,
-                                const QString &label = QString());
-    Q_INVOKABLE QVariantList listVersions(const QString &designPath) const;
-    // Load snapshot JSON for revert; empty on failure
-    Q_INVOKABLE QByteArray loadVersion(const QString &designPath, int versionNumber) const;
-    Q_INVOKABLE bool deleteVersion(const QString &designPath, int versionNumber);
+    // Pack / unpack a design snapshot for the embedded "history" array (no nested history)
+    static QJsonObject makeHistoryEntry(int versionNumber, const QByteArray &designJsonUtf8,
+                                        const QString &label = QString());
+    static QByteArray payloadFromEntry(const QJsonObject &entry);
+    static QVariantList historyMetaList(const QJsonArray &history);   // UI rows without payload
+
+    // Import legacy "<design>.f360.versions/" into an in-memory history array; returns true if any imported.
+    // Does not delete the sidecar until removeSidecar() is called after a successful save.
+    static bool migrateSidecarInto(const QString &designPath, QJsonArray &history, int maxVersions);
+    static QString versionsDirFor(const QString &designPath);
+    static bool removeSidecar(const QString &designPath);
 
     Q_INVOKABLE bool writeAutosave(const QString &documentId, const QByteArray &jsonUtf8,
                                    const QString &displayName, const QString &originalPath);

@@ -336,6 +336,36 @@ void testFilletChamferShell() {
         "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, roof, slope)}}, {"thickness", "2 mm"}});
     check(slope >= 0 && roofShell->isHealthy() && totalVolume(&roofDoc) > 0 && totalVolume(&roofDoc) < roofVolume,
           "shell: sloped hip-roof face, 2 mm walls across a 2 mm ridge", status(&roofDoc));
+
+    // User recipe: box + face-extrude frustum (45°) then shell a sloped face 2 mm inside
+    {
+        FissionDocument doc;
+        auto *sk = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        sk->addRectangle(-50.7872, -46.7061, 101.5744, 93.4122);
+        doc.rebuild();
+        extrude(&doc, sk, "40 mm");
+        const auto top = [](const gp_Pnt &p) { return near(p.Z(), 40, 1e-3); };
+        auto *frustum = doc.addFeature(
+            "Extrude", {{"profiles", QVariantList{faceAt(&doc, 0, top)}},
+                        {"distance", "40 mm"},
+                        {"taper", "45 deg"},
+                        {"operation", "join"}});
+        check(frustum->isHealthy() && totalVolume(&doc) > 0, "shell: frustum face-extrude", status(&doc));
+        const TopoDS_Shape shape = doc.body(0)->shape();
+        const auto faces = GeomUtils::faceMap(shape);
+        int slope = -1;
+        for (int i = 1; i <= faces.Extent(); ++i) {
+            const gp_Pnt c = GeomUtils::faceCentroid(TopoDS::Face(faces(i)));
+            if (c.Z() > 45 && c.Z() < 75 && std::fabs(c.Y()) > 15) {
+                slope = i - 1;
+                break;
+            }
+        }
+        auto *sh = doc.addFeature(
+            "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, shape, slope)}}, {"thickness", "2 mm"}});
+        check(slope >= 0 && sh->isHealthy() && totalVolume(&doc) > 0,
+              "shell: 45° frustum slope face, 2 mm inside (user recipe)", status(&doc));
+    }
 }
 
 void testRevolveLoftSweep() {
@@ -1871,13 +1901,25 @@ void testDocumentVersionsAndAutosave() {
     check(found, "versions: pendingAutosaves lists this document");
 
     check(part.save(path) && part.versionNumber() == 2, "versions: second save is v2");
-    check(part.versionHistory().size() == 2, "versions: two snapshots on disk");
+    check(part.versionHistory().size() == 2, "versions: two snapshots embedded");
+    check(!QDir(path + QStringLiteral(".versions")).exists(),
+          "versions: no sidecar folder next to the file");
+
+    // History must live inside the .f360 JSON
+    {
+        QFile f(path);
+        check(f.open(QIODevice::ReadOnly), "versions: reopen saved file");
+        const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+        check(root.value(QStringLiteral("history")).toArray().size() == 2,
+              "versions: history array in .f360", QString::number(root.value(QStringLiteral("history")).toArray().size()));
+    }
 
     // Revert to v1 — contentRevision advances so linked assets go stale
     const qint64 beforeRevert = part.contentRevision();
     check(part.revertToVersion(1) && part.contentRevision() > beforeRevert,
           "versions: revertToVersion(1)", part.lastError());
     check(part.bodies().size() >= 1, "versions: reverted design still has bodies");
+    check(part.versionHistory().size() == 2, "versions: revert keeps the embedded history");
 
     DocumentVersionStore::instance()->clearAutosave(part.documentId());
 }

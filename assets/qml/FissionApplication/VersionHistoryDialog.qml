@@ -59,7 +59,7 @@ Popup {
             Layout.bottomMargin: 0
             text: doc && !doc.filePath
                   ? "Save the design once to start version history."
-                  : "Each Save stores a compressed snapshot next to the file. Revert loads that snapshot (linked drawings may then be out of date)."
+                  : "Each Save stores a compressed snapshot inside this .f360 file. Revert loads that snapshot (linked drawings may then be out of date)."
             color: Theme.textDim
             font.pixelSize: 11
             wrapMode: Text.WordWrap
