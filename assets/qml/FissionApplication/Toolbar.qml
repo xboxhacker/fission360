@@ -328,80 +328,109 @@ Rectangle {
                 act("Send to Slicer", "orca", () => app.sendToOrca(),
                     "Export the selected (or all) VISIBLE bodies to a temp STL and open OrcaSlicer or Bambu Studio (Display Settings \u25B8 Slicer). Hidden bodies are never sent")
             ] },
-            { title: "SETUP", quick: 2, items: [
+            { title: "SETUP", quick: 3, items: [
                 act("New Setup", "plane", () => app.mfgNewSetup(), "Create a manufacture setup (stock from body bounds)"),
+                act("Refresh Stock", "plane", () => app.mfgRefreshStock(), "Rebuild stock box from body bounds + offset"),
                 act("Tool Library", "settings", () => app.openManufacture(1), "Edit tools saved with this design"),
                 act("Manufacture Panel", "settings", () => app.openManufacture(), "Open the Manufacture panel")
             ] },
-            { title: "MILLING", quick: 3, items: [
+            { title: "2D MILL", quick: 4, items: [
+                act("Face", "extrude", () => app.mfgAddOp("face", "Face")),
                 act("2D Adaptive", "extrude", () => app.mfgAddOp("2d-adaptive", "2D Adaptive")),
                 act("2D Pocket", "extrude", () => app.mfgAddOp("2d-pocket", "2D Pocket")),
                 act("2D Contour", "extrude", () => app.mfgAddOp("2d-contour", "2D Contour")),
-                act("Face", "extrude", () => app.mfgAddOp("face", "Face")),
-                act("Drill", "hole", () => app.mfgAddOp("drill", "Drill")),
-                act("3D Adaptive", "extrude", () => app.mfgAddOp("3d-adaptive", "3D Adaptive")),
-                act("Parallel", "extrude", () => app.mfgAddOp("parallel", "Parallel")),
-                act("Scallop", "extrude", () => app.mfgAddOp("scallop", "Scallop"))
+                act("Slot", "extrude", () => app.mfgAddOp("slot", "Slot")),
+                act("Trace", "extrude", () => app.mfgAddOp("trace", "Trace")),
+                act("Bore", "hole", () => app.mfgAddOp("bore", "Bore")),
+                act("Circular", "circle", () => app.mfgAddOp("circular", "Circular")),
+                act("Engrave", "extrude", () => app.mfgAddOp("engrave", "Engrave")),
+                act("Chamfer", "chamfer", () => app.mfgAddOp("chamfer", "Chamfer")),
+                act("Thread", "hole", () => app.mfgAddOp("thread", "Thread"))
             ] },
-            { title: "TURNING", quick: 2, items: [
+            { title: "DRILL", quick: 2, items: [
+                act("Drill", "hole", () => app.mfgAddOp("drill", "Drill")),
+                act("Tap", "hole", () => app.mfgAddOp("tap", "Tap")),
+                act("Thread Mill", "hole", () => app.mfgAddOp("thread-mill", "Thread Mill"))
+            ] },
+            { title: "3D MILL", quick: 3, items: [
+                act("Adaptive Clearing", "extrude", () => app.mfgAddOp("3d-adaptive", "Adaptive Clearing")),
+                act("Pocket Clearing", "extrude", () => app.mfgAddOp("3d-pocket", "Pocket Clearing")),
+                act("Parallel", "extrude", () => app.mfgAddOp("parallel", "Parallel")),
+                act("3D Contour", "extrude", () => app.mfgAddOp("3d-contour", "3D Contour")),
+                act("Flat", "extrude", () => app.mfgAddOp("flat", "Flat")),
+                act("Scallop", "extrude", () => app.mfgAddOp("scallop", "Scallop")),
+                act("Radial", "extrude", () => app.mfgAddOp("radial", "Radial")),
+                act("Spiral", "extrude", () => app.mfgAddOp("spiral", "Spiral")),
+                act("Morphed Spiral", "extrude", () => app.mfgAddOp("morphed-spiral", "Morphed Spiral")),
+                act("Pencil", "extrude", () => app.mfgAddOp("pencil", "Pencil")),
+                act("Ramp", "extrude", () => app.mfgAddOp("ramp", "Ramp")),
+                act("Steep & Shallow", "extrude", () => app.mfgAddOp("steep-shallow", "Steep & Shallow")),
+                act("Project", "extrude", () => app.mfgAddOp("project", "Project")),
+                act("Morph", "extrude", () => app.mfgAddOp("morph", "Morph")),
+                act("Flow", "extrude", () => app.mfgAddOp("flow", "Flow")),
+                act("Blend", "extrude", () => app.mfgAddOp("blend", "Blend"))
+            ] },
+            { title: "MULTI-AXIS", quick: 2, items: [
+                act("Swarf", "extrude", () => app.mfgAddOp("swarf", "Swarf")),
+                act("Multi-Axis Contour", "extrude", () => app.mfgAddOp("multi-contour", "Multi-Axis Contour")),
+                act("Rotary / Wrap", "revolve", () => app.mfgAddOp("rotary", "Rotary / Wrap"))
+            ] },
+            { title: "TURNING", quick: 3, items: [
                 act("Facing", "revolve", () => app.mfgAddOp("turning-face", "Facing")),
                 act("Profiling", "revolve", () => app.mfgAddOp("turning-profile", "Profiling")),
                 act("Grooving", "revolve", () => app.mfgAddOp("turning-groove", "Grooving")),
-                act("Parting", "revolve", () => app.mfgAddOp("turning-part", "Parting"))
+                act("Parting", "revolve", () => app.mfgAddOp("turning-part", "Parting")),
+                act("Threading", "revolve", () => app.mfgAddOp("turning-thread", "Threading")),
+                act("Adaptive Roughing", "revolve", () => app.mfgAddOp("turning-adaptive", "Adaptive Roughing"))
+            ] },
+            { title: "PROBE", quick: 1, items: [
+                act("Probe WCS", "measure", () => app.mfgAddOp("probe-wcs", "Probe WCS")),
+                act("Probe Geometry", "measure", () => app.mfgAddOp("probe-geometry", "Probe Geometry"))
             ] },
             { title: "FINISH", quick: 2, items: [
-                act("Simulate", "view", () => app.mfgSimulate(), "Report operations on the active setup"),
-                act("Post Process", "export", () => app.mfgPostProcess(), "Export placeholder G-code for the active setup")
+                act("Simulate", "view", () => app.mfgSimulate(), "Estimate toolpath length for the active setup"),
+                act("Post Process", "export", () => app.mfgPostProcess(), "Export op-aware NC stub for the active setup")
             ] },
             selectGroup
         ],
         DRAWING: [
             { title: "CREATE", quick: 4, items: [
                 act("Base View", "plane", () => {
-                    if (app.drawingWorkspace) {
-                        app.drawingWorkspace.placeOrientation = "front"
-                        app.drawingWorkspace.pendingViewType = "base"
-                        app.drawingWorkspace.activeTool = "baseView"
-                    }
-                }, "Place a base view of the design on the sheet"),
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginBaseView("front")
+                }, "Place a base view — pick orientation, click the sheet"),
                 act("Projected View", "planeoffset", () => {
-                    if (!app.drawingWorkspace || !app.drawingWorkspace.selectedView) {
-                        fissionApp.showMessage("Select a parent view first"); return
-                    }
-                    app.drawingWorkspace.placeDirection = "right"
-                    app.drawingWorkspace.pendingViewType = "projected"
-                    app.drawingWorkspace.activeTool = "projectedView"
-                }, "Place a projected view from the selected view"),
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginProjectMode()
+                }, "Shift+drag from a parent view toward the projection (Fusion-style)"),
                 act("Section View", "section", () => {
                     if (!app.drawingWorkspace || !app.drawingWorkspace.selectedView) {
                         fissionApp.showMessage("Select a parent view first"); return
                     }
-                    app.drawingWorkspace.placeDirection = "right"
-                    app.drawingWorkspace.pendingViewType = "section"
                     app.drawingWorkspace.activeTool = "sectionView"
-                }, "Place a section view from the selected view"),
+                    fissionApp.showMessage("Click the sheet to place a section view")
+                }, "Place a section view from the selected parent"),
                 act("Detail View", "circle", () => {
                     if (!app.drawingWorkspace || !app.drawingWorkspace.selectedView) {
                         fissionApp.showMessage("Select a parent view first"); return
                     }
-                    app.drawingWorkspace.pendingViewType = "detail"
                     app.drawingWorkspace.activeTool = "detailView"
-                }, "Place a detail view of the selected view"),
-                act("Auxiliary View", "plane", () => {
-                    if (app.drawingWorkspace) {
-                        app.drawingWorkspace.placeOrientation = "isometric"
-                        app.drawingWorkspace.pendingViewType = "auxiliary"
-                        app.drawingWorkspace.activeTool = "auxiliaryView"
-                    }
-                }, "Place an auxiliary / isometric view"),
+                    fissionApp.showMessage("Click the sheet to place a detail view")
+                }, "Place a detail view from the selected parent"),
+                act("Iso View", "plane", () => {
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginBaseView("isometric")
+                }, "Place an isometric base view"),
                 act("Update from Design", "finish", () => app.updateActiveDrawingFromDesign(),
                     "Rebuild all views from the current design and clear out-of-date"),
                 act("Regenerate Sheet", "finish", () => app.drawingWorkspace && app.drawingWorkspace.regenerateAll(),
-                    "Rebuild views on the active sheet from the design")
+                    "Rebuild views on the active sheet from the design"),
+                act("Fit Sheet", "view", () => app.drawingWorkspace && app.drawingWorkspace.fitSheet(),
+                    "Reset pan/zoom to fit the sheet (F)")
             ] },
             { title: "ANNOTATE", quick: 3, items: [
                 act("Dimension", "measure", () => {
-                    if (app.drawingWorkspace) app.drawingWorkspace.activeTool = "dimension"
+                    if (app.drawingWorkspace) {
+                        app.drawingWorkspace.activeTool = "dimension"
+                        fissionApp.showMessage("Drag on the sheet to place a dimension")
+                    }
                 }, "Drag on the sheet to place a linear dimension"),
                 act("Text", "script", () => {
                     if (app.drawingWorkspace) app.drawingWorkspace.activeTool = "text"

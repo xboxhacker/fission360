@@ -232,8 +232,12 @@ public:
     Q_INVOKABLE bool updateMfgItem(const QString &kind, const QString &id, const QVariantMap &patch);
     Q_INVOKABLE bool removeMfgItem(const QString &kind, const QString &id);
     Q_INVOKABLE void setActiveMfgSetup(const QString &id);
-    // Writes a simple NC program for the active setup's operations (placeholder G-code).
+    // Recompute stock AABB from visible bodies + setup stockOffset.
+    Q_INVOKABLE bool refreshMfgStock(const QString &setupId = QString());
+    // Writes an NC stub for the active setup (op-type aware stock paths — not a full CAM kernel).
     Q_INVOKABLE QString exportMfgGCode(const QString &path);
+    // Human-readable simulate report for the active setup.
+    Q_INVOKABLE QString simulateMfgReport() const;
 
     QList<QObject *> bodyObjects() const;
     QList<QObject *> parameterObjects() const;

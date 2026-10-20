@@ -182,6 +182,23 @@ ApplicationWindow {
         const id = doc.addMfgItem("setups", {})
         fissionApp.showMessage(id ? "Setup created — stock from body bounds" : (doc.lastError || "Setup failed"))
     }
+    function mfgRefreshStock() {
+        openManufacture(0)
+        if (!doc) return
+        const ok = doc.refreshMfgStock()
+        fissionApp.showMessage(ok ? "Stock refreshed from body bounds" : (doc.lastError || "Refresh failed"))
+    }
+    function mfgPickTool(type) {
+        const tools = (doc && doc.manufacture) ? (doc.manufacture.tools || []) : []
+        const prefer = (type.indexOf("drill") >= 0 || type.indexOf("bore") >= 0) ? "drill"
+                     : (type.indexOf("tap") >= 0) ? "tap"
+                     : (type.indexOf("turn") >= 0) ? "turning"
+                     : (type.indexOf("probe") >= 0) ? "probe"
+                     : (type === "face" || type === "flat") ? "facemill"
+                     : "endmill"
+        for (const t of tools) if (t.type === prefer) return t.id
+        return tools.length ? tools[0].id : ""
+    }
     function mfgAddOp(type, name) {
         openManufacture(2)
         if (!doc) return
@@ -191,21 +208,19 @@ ApplicationWindow {
             manufactureTab = 0
             return
         }
-        const tools = mfg.tools || []
         const id = doc.addMfgItem("operations", {
             type: type, name: name || type, setupId: mfg.activeSetupId,
-            toolId: tools.length ? tools[0].id : ""
+            toolId: mfgPickTool(type), enabled: true, folder: ""
         })
         fissionApp.showMessage(id ? (name + " added") : (doc.lastError || "Operation failed"))
     }
     function mfgSimulate() {
         openManufacture(3)
         if (!doc) return
-        const mfg = doc.manufacture || {}
-        const ops = (mfg.operations || []).filter(o => o.setupId === mfg.activeSetupId)
-        if (!mfg.activeSetupId) { fissionApp.showMessage("No active setup to simulate"); return }
-        if (!ops.length) { fissionApp.showMessage("No operations on the active setup"); return }
-        fissionApp.showMessage("Simulate: " + ops.length + " operation(s) on active setup (placeholder)")
+        const report = doc.simulateMfgReport()
+        fissionApp.showMessage(report.split("\n")[0] || report)
+        if (manufactureLoader.item)
+            manufactureLoader.item.simulateText = report
     }
     function mfgPostProcess() {
         openManufacture(3)
@@ -1596,19 +1611,49 @@ ApplicationWindow {
             cmd("Recover Autosave", "", "File", "any", () => openRecoverAutosave()),
             cmd("Send to Slicer", "", "Manufacture", "model", () => sendToOrca()),
             cmd("New Setup", "", "Manufacture", "model", () => mfgNewSetup()),
+            cmd("Refresh Stock", "", "Manufacture", "model", () => mfgRefreshStock()),
             cmd("Tool Library", "", "Manufacture", "any", () => openManufacture(1)),
+            cmd("Face", "", "Manufacture", "model", () => mfgAddOp("face", "Face")),
             cmd("2D Adaptive", "", "Manufacture", "model", () => mfgAddOp("2d-adaptive", "2D Adaptive")),
             cmd("2D Pocket", "", "Manufacture", "model", () => mfgAddOp("2d-pocket", "2D Pocket")),
             cmd("2D Contour", "", "Manufacture", "model", () => mfgAddOp("2d-contour", "2D Contour")),
-            cmd("Face", "", "Manufacture", "model", () => mfgAddOp("face", "Face")),
+            cmd("Slot", "", "Manufacture", "model", () => mfgAddOp("slot", "Slot")),
+            cmd("Trace", "", "Manufacture", "model", () => mfgAddOp("trace", "Trace")),
+            cmd("Bore", "", "Manufacture", "model", () => mfgAddOp("bore", "Bore")),
+            cmd("Circular", "", "Manufacture", "model", () => mfgAddOp("circular", "Circular")),
+            cmd("Engrave", "", "Manufacture", "model", () => mfgAddOp("engrave", "Engrave")),
+            cmd("Chamfer", "", "Manufacture", "model", () => mfgAddOp("chamfer", "Chamfer")),
+            cmd("Thread", "", "Manufacture", "model", () => mfgAddOp("thread", "Thread")),
             cmd("Drill", "", "Manufacture", "model", () => mfgAddOp("drill", "Drill")),
-            cmd("3D Adaptive", "", "Manufacture", "model", () => mfgAddOp("3d-adaptive", "3D Adaptive")),
+            cmd("Tap", "", "Manufacture", "model", () => mfgAddOp("tap", "Tap")),
+            cmd("Thread Mill", "", "Manufacture", "model", () => mfgAddOp("thread-mill", "Thread Mill")),
+            cmd("Adaptive Clearing", "", "Manufacture", "model", () => mfgAddOp("3d-adaptive", "Adaptive Clearing")),
+            cmd("Pocket Clearing", "", "Manufacture", "model", () => mfgAddOp("3d-pocket", "Pocket Clearing")),
             cmd("Parallel", "", "Manufacture", "model", () => mfgAddOp("parallel", "Parallel")),
+            cmd("3D Contour", "", "Manufacture", "model", () => mfgAddOp("3d-contour", "3D Contour")),
+            cmd("Flat", "", "Manufacture", "model", () => mfgAddOp("flat", "Flat")),
             cmd("Scallop", "", "Manufacture", "model", () => mfgAddOp("scallop", "Scallop")),
+            cmd("Radial", "", "Manufacture", "model", () => mfgAddOp("radial", "Radial")),
+            cmd("Spiral", "", "Manufacture", "model", () => mfgAddOp("spiral", "Spiral")),
+            cmd("Morphed Spiral", "", "Manufacture", "model", () => mfgAddOp("morphed-spiral", "Morphed Spiral")),
+            cmd("Pencil", "", "Manufacture", "model", () => mfgAddOp("pencil", "Pencil")),
+            cmd("Ramp", "", "Manufacture", "model", () => mfgAddOp("ramp", "Ramp")),
+            cmd("Steep & Shallow", "", "Manufacture", "model", () => mfgAddOp("steep-shallow", "Steep & Shallow")),
+            cmd("Project", "", "Manufacture", "model", () => mfgAddOp("project", "Project")),
+            cmd("Morph", "", "Manufacture", "model", () => mfgAddOp("morph", "Morph")),
+            cmd("Flow", "", "Manufacture", "model", () => mfgAddOp("flow", "Flow")),
+            cmd("Blend", "", "Manufacture", "model", () => mfgAddOp("blend", "Blend")),
+            cmd("Swarf", "", "Manufacture", "model", () => mfgAddOp("swarf", "Swarf")),
+            cmd("Multi-Axis Contour", "", "Manufacture", "model", () => mfgAddOp("multi-contour", "Multi-Axis Contour")),
+            cmd("Rotary / Wrap", "", "Manufacture", "model", () => mfgAddOp("rotary", "Rotary / Wrap")),
             cmd("Facing", "", "Manufacture", "model", () => mfgAddOp("turning-face", "Facing")),
             cmd("Profiling", "", "Manufacture", "model", () => mfgAddOp("turning-profile", "Profiling")),
             cmd("Grooving", "", "Manufacture", "model", () => mfgAddOp("turning-groove", "Grooving")),
             cmd("Parting", "", "Manufacture", "model", () => mfgAddOp("turning-part", "Parting")),
+            cmd("Threading", "", "Manufacture", "model", () => mfgAddOp("turning-thread", "Threading")),
+            cmd("Adaptive Roughing", "", "Manufacture", "model", () => mfgAddOp("turning-adaptive", "Adaptive Roughing")),
+            cmd("Probe WCS", "", "Manufacture", "model", () => mfgAddOp("probe-wcs", "Probe WCS")),
+            cmd("Probe Geometry", "", "Manufacture", "model", () => mfgAddOp("probe-geometry", "Probe Geometry")),
             cmd("Simulate", "", "Manufacture", "model", () => mfgSimulate()),
             cmd("Post Process", "", "Manufacture", "model", () => mfgPostProcess()),
             cmd("Manufacture Panel", "", "Manufacture", "any", () => openManufacture()),

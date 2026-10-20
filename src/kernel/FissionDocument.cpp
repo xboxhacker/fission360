@@ -240,6 +240,25 @@ QVariantMap FissionDocument::defaultManufacture() {
                          {"diameter", 10.0},
                          {"flutes", 5},
                          {"length", 40.0}};
+    tools << QVariantMap{{"id", QStringLiteral("tool-tapM4")},
+                         {"name", QStringLiteral("M4×0.7 Tap")},
+                         {"type", QStringLiteral("tap")},
+                         {"diameter", 4.0},
+                         {"pitch", 0.7},
+                         {"flutes", 3},
+                         {"length", 40.0}};
+    tools << QVariantMap{{"id", QStringLiteral("tool-turn55")},
+                         {"name", QStringLiteral("55° Turning Insert")},
+                         {"type", QStringLiteral("turning")},
+                         {"diameter", 0.8},
+                         {"flutes", 1},
+                         {"length", 25.0}};
+    tools << QVariantMap{{"id", QStringLiteral("tool-probe")},
+                         {"name", QStringLiteral("3D Touch Probe")},
+                         {"type", QStringLiteral("probe")},
+                         {"diameter", 6.0},
+                         {"flutes", 0},
+                         {"length", 50.0}};
     return QVariantMap{{"setups", QVariantList()},
                        {"tools", tools},
                        {"operations", QVariantList()},
@@ -273,7 +292,9 @@ QString FissionDocument::addMfgItem(const QString &kind, const QVariantMap &prop
         if (item.value(QStringLiteral("name")).toString().isEmpty())
             item.insert(QStringLiteral("name"), QStringLiteral("Setup%1").arg(list.size() + 1));
         if (!item.contains(QStringLiteral("wcs")))
-            item.insert(QStringLiteral("wcs"), QStringLiteral("model"));
+            item.insert(QStringLiteral("wcs"), QStringLiteral("model-origin"));
+        if (!item.contains(QStringLiteral("machine")))
+            item.insert(QStringLiteral("machine"), QStringLiteral("Generic 3-axis"));
         if (!item.contains(QStringLiteral("stockOffset")))
             item.insert(QStringLiteral("stockOffset"), 2.0);
         // Stock from body bounds when bodies exist
@@ -303,6 +324,10 @@ QString FissionDocument::addMfgItem(const QString &kind, const QVariantMap &prop
             item.insert(QStringLiteral("type"), QStringLiteral("endmill"));
         if (!item.contains(QStringLiteral("diameter")))
             item.insert(QStringLiteral("diameter"), 6.0);
+        if (!item.contains(QStringLiteral("feed")))
+            item.insert(QStringLiteral("feed"), 500.0);
+        if (!item.contains(QStringLiteral("speed")))
+            item.insert(QStringLiteral("speed"), 8000.0);
     } else { // operations
         if (item.value(QStringLiteral("name")).toString().isEmpty()) {
             const QString type = item.value(QStringLiteral("type"), QStringLiteral("2d-contour")).toString();
@@ -310,6 +335,10 @@ QString FissionDocument::addMfgItem(const QString &kind, const QVariantMap &prop
         }
         if (item.value(QStringLiteral("setupId")).toString().isEmpty())
             item.insert(QStringLiteral("setupId"), m_manufacture.value(QStringLiteral("activeSetupId")));
+        if (!item.contains(QStringLiteral("enabled")))
+            item.insert(QStringLiteral("enabled"), true);
+        if (!item.contains(QStringLiteral("folder")))
+            item.insert(QStringLiteral("folder"), QStringLiteral(""));
         if (!item.contains(QStringLiteral("feed")))
             item.insert(QStringLiteral("feed"), 500.0);
         if (!item.contains(QStringLiteral("speed")))
@@ -379,6 +408,122 @@ void FissionDocument::setActiveMfgSetup(const QString &id) {
     emit manufactureChanged();
 }
 
+bool FissionDocument::refreshMfgStock(const QString &setupIdIn) {
+    QString setupId = setupIdIn;
+    if (setupId.isEmpty())
+        setupId = m_manufacture.value(QStringLiteral("activeSetupId")).toString();
+    if (setupId.isEmpty()) {
+        m_lastError = QStringLiteral("No active setup");
+        return false;
+    }
+    double box[6] = {1e9, 1e9, 1e9, -1e9, -1e9, -1e9};
+    bool any = false;
+    for (auto *b : m_bodies) {
+        double bb[6];
+        if (!b || !b->box(bb)) continue;
+        any = true;
+        for (int i = 0; i < 3; ++i) {
+            box[i] = std::min(box[i], bb[i]);
+            box[i + 3] = std::max(box[i + 3], bb[i + 3]);
+        }
+    }
+    if (!any) {
+        m_lastError = QStringLiteral("No bodies to size stock from");
+        return false;
+    }
+    QVariantList list = m_manufacture.value(QStringLiteral("setups")).toList();
+    int idx = -1;
+    for (int i = 0; i < list.size(); ++i)
+        if (list[i].toMap().value(QStringLiteral("id")).toString() == setupId) {
+            idx = i;
+            break;
+        }
+    if (idx < 0) {
+        m_lastError = QStringLiteral("Setup not found");
+        return false;
+    }
+    checkpoint();
+    QVariantMap item = list[idx].toMap();
+    const double o = item.value(QStringLiteral("stockOffset"), 2.0).toDouble();
+    item.insert(QStringLiteral("stock"),
+                QVariantList{box[0] - o, box[1] - o, box[2] - o, box[3] + o, box[4] + o, box[5] + o});
+    list[idx] = item;
+    m_manufacture.insert(QStringLiteral("setups"), list);
+    setModified(true);
+    emit manufactureChanged();
+    m_lastError.clear();
+    return true;
+}
+
+QString FissionDocument::simulateMfgReport() const {
+    const QString setupId = m_manufacture.value(QStringLiteral("activeSetupId")).toString();
+    if (setupId.isEmpty())
+        return QStringLiteral("No active setup to simulate");
+    QVariantMap setup;
+    for (const QVariant &v : m_manufacture.value(QStringLiteral("setups")).toList()) {
+        const QVariantMap s = v.toMap();
+        if (s.value(QStringLiteral("id")).toString() == setupId) {
+            setup = s;
+            break;
+        }
+    }
+    QVariantList ops;
+    for (const QVariant &v : m_manufacture.value(QStringLiteral("operations")).toList()) {
+        const QVariantMap o = v.toMap();
+        if (o.value(QStringLiteral("setupId")).toString() == setupId
+            && o.value(QStringLiteral("enabled"), true).toBool())
+            ops.append(o);
+    }
+    if (ops.isEmpty())
+        return QStringLiteral("No enabled operations on the active setup");
+
+    const QVariantList stock = setup.value(QStringLiteral("stock")).toList();
+    double pathMm = 0;
+    if (stock.size() >= 6) {
+        const double dx = stock[3].toDouble() - stock[0].toDouble();
+        const double dy = stock[4].toDouble() - stock[1].toDouble();
+        const double dz = stock[5].toDouble() - stock[2].toDouble();
+        pathMm = 2.0 * (dx + dy); // contour baseline; scaled per op below
+        Q_UNUSED(dz);
+    }
+    QStringList lines;
+    lines << QStringLiteral("Simulate — %1 (%2)")
+                 .arg(setup.value(QStringLiteral("name")).toString(),
+                      setup.value(QStringLiteral("machine"), QStringLiteral("machine")).toString());
+    lines << QStringLiteral("%1 enabled op(s); WCS %2")
+                 .arg(ops.size())
+                 .arg(setup.value(QStringLiteral("wcs"), QStringLiteral("model-origin")).toString());
+    int n = 1;
+    double total = 0;
+    for (const QVariant &v : ops) {
+        const QVariantMap o = v.toMap();
+        const QString type = o.value(QStringLiteral("type")).toString();
+        double factor = 1.0;
+        if (type.contains(QLatin1String("adaptive")) || type.contains(QLatin1String("pocket"))
+            || type.contains(QLatin1String("scallop")) || type.contains(QLatin1String("parallel")))
+            factor = 4.0;
+        else if (type.contains(QLatin1String("drill")) || type.contains(QLatin1String("tap"))
+                 || type.contains(QLatin1String("probe")))
+            factor = 0.5;
+        else if (type.contains(QLatin1String("turn")) || type.contains(QLatin1String("facing"))
+                 || type.contains(QLatin1String("profil")) || type.contains(QLatin1String("groov"))
+                 || type.contains(QLatin1String("part")))
+            factor = 1.5;
+        else if (type.contains(QLatin1String("3d")) || type.contains(QLatin1String("swarf"))
+                 || type.contains(QLatin1String("multi")))
+            factor = 6.0;
+        const double len = pathMm * factor;
+        total += len;
+        lines << QStringLiteral("  %1. %2 [%3] ~%4 mm")
+                     .arg(n++)
+                     .arg(o.value(QStringLiteral("name")).toString(), type)
+                     .arg(int(len));
+    }
+    lines << QStringLiteral("Est. toolpath ~%1 mm (stock-box stub, not collision-checked)")
+                 .arg(int(total));
+    return lines.join(QLatin1Char('\n'));
+}
+
 QString FissionDocument::exportMfgGCode(const QString &path) {
     if (path.isEmpty()) {
         m_lastError = QStringLiteral("No output path");
@@ -400,42 +545,137 @@ QString FissionDocument::exportMfgGCode(const QString &path) {
     QVariantList ops;
     for (const QVariant &v : m_manufacture.value(QStringLiteral("operations")).toList()) {
         const QVariantMap o = v.toMap();
-        if (o.value(QStringLiteral("setupId")).toString() == setupId) ops.append(o);
+        if (o.value(QStringLiteral("setupId")).toString() == setupId
+            && o.value(QStringLiteral("enabled"), true).toBool())
+            ops.append(o);
     }
     if (ops.isEmpty()) {
-        m_lastError = QStringLiteral("No operations on the active setup");
+        m_lastError = QStringLiteral("No enabled operations on the active setup");
         return {};
     }
 
+    auto toolById = [&](const QString &id) -> QVariantMap {
+        for (const QVariant &v : m_manufacture.value(QStringLiteral("tools")).toList()) {
+            const QVariantMap t = v.toMap();
+            if (t.value(QStringLiteral("id")).toString() == id) return t;
+        }
+        return {};
+    };
+
+    auto appendBox = [](QString &g, double x0, double y0, double x1, double y1, double z, double feed) {
+        g += QStringLiteral("G0 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
+        g += QStringLiteral("G1 Z%1 F%2\n").arg(z, 0, 'f', 3).arg(feed, 0, 'f', 1);
+        g += QStringLiteral("G1 X%1 Y%2 F%3\n").arg(x1, 0, 'f', 3).arg(y0, 0, 'f', 3).arg(feed, 0, 'f', 1);
+        g += QStringLiteral("G1 X%1 Y%2\n").arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3);
+        g += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y1, 0, 'f', 3);
+        g += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
+    };
+
     QString gcode;
-    gcode += QStringLiteral("(Fission 360 manufacture export — placeholder NC)\n");
-    gcode += QStringLiteral("(Setup: %1)\n").arg(setup.value(QStringLiteral("name")).toString());
+    gcode += QStringLiteral("(Fission 360 manufacture export — stock-aware NC stub)\n");
+    gcode += QStringLiteral("(Setup: %1 | Machine: %2 | WCS: %3)\n")
+                 .arg(setup.value(QStringLiteral("name")).toString(),
+                      setup.value(QStringLiteral("machine"), QStringLiteral("Generic")).toString(),
+                      setup.value(QStringLiteral("wcs"), QStringLiteral("model-origin")).toString());
     gcode += QStringLiteral("G21 G90 G94\nG17\n");
     const QVariantList stock = setup.value(QStringLiteral("stock")).toList();
-    double zSafe = stock.size() >= 6 ? stock[5].toDouble() + 5.0 : 50.0;
+    const double zSafe = stock.size() >= 6 ? stock[5].toDouble() + 5.0 : 50.0;
     gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
     int n = 1;
     for (const QVariant &v : ops) {
         const QVariantMap o = v.toMap();
-        gcode += QStringLiteral("(Op %1: %2 / %3)\n").arg(n++).arg(o.value(QStringLiteral("type")).toString(),
-                                                                   o.value(QStringLiteral("name")).toString());
+        const QString type = o.value(QStringLiteral("type")).toString();
+        const QVariantMap tool = toolById(o.value(QStringLiteral("toolId")).toString());
+        gcode += QStringLiteral("(Op %1: %2 / %3)\n")
+                     .arg(n++)
+                     .arg(type, o.value(QStringLiteral("name")).toString());
+        if (!tool.isEmpty())
+            gcode += QStringLiteral("(Tool: %1 Ø%2)\n")
+                         .arg(tool.value(QStringLiteral("name")).toString())
+                         .arg(tool.value(QStringLiteral("diameter")).toDouble(), 0, 'f', 2);
         const double feed = o.value(QStringLiteral("feed"), 500.0).toDouble();
         const double speed = o.value(QStringLiteral("speed"), 8000.0).toDouble();
-        gcode += QStringLiteral("S%1 M3\n").arg(int(speed));
+        const double step = o.value(QStringLiteral("stepdown"), 1.0).toDouble();
+        if (type.contains(QLatin1String("probe")))
+            gcode += QStringLiteral("G0\n"); // probe: no spindle
+        else
+            gcode += QStringLiteral("S%1 M3\n").arg(int(speed));
+
         if (stock.size() >= 6) {
-            const double x0 = stock[0].toDouble(), y0 = stock[1].toDouble();
-            const double x1 = stock[3].toDouble(), y1 = stock[4].toDouble();
-            const double z = stock[2].toDouble() + o.value(QStringLiteral("stepdown"), 1.0).toDouble();
-            gcode += QStringLiteral("G0 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
-            gcode += QStringLiteral("G1 Z%1 F%2\n").arg(z, 0, 'f', 3).arg(feed, 0, 'f', 1);
-            gcode += QStringLiteral("G1 X%1 Y%2 F%3\n").arg(x1, 0, 'f', 3).arg(y0, 0, 'f', 3).arg(feed, 0, 'f', 1);
-            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x1, 0, 'f', 3).arg(y1, 0, 'f', 3);
-            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y1, 0, 'f', 3);
-            gcode += QStringLiteral("G1 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(y0, 0, 'f', 3);
+            const double x0 = stock[0].toDouble(), y0 = stock[1].toDouble(), z0 = stock[2].toDouble();
+            const double x1 = stock[3].toDouble(), y1 = stock[4].toDouble(), z1 = stock[5].toDouble();
+            const double cx = 0.5 * (x0 + x1), cy = 0.5 * (y0 + y1);
+            const double inset = std::min(3.0, 0.15 * std::min(x1 - x0, y1 - y0));
+
+            if (type.contains(QLatin1String("drill")) || type.contains(QLatin1String("tap"))
+                || type.contains(QLatin1String("bore")) || type.contains(QLatin1String("circular"))) {
+                const QList<QPair<double, double>> pts = {
+                    {cx, cy}, {x0 + inset, y0 + inset}, {x1 - inset, y0 + inset},
+                    {x1 - inset, y1 - inset}, {x0 + inset, y1 - inset}};
+                for (const auto &p : pts) {
+                    gcode += QStringLiteral("G0 X%1 Y%2\n").arg(p.first, 0, 'f', 3).arg(p.second, 0, 'f', 3);
+                    gcode += QStringLiteral("G0 Z%1\n").arg(z1 + 2.0, 0, 'f', 3);
+                    gcode += QStringLiteral("G1 Z%1 F%2\n").arg(z0 + step, 0, 'f', 3).arg(feed * 0.4, 0, 'f', 1);
+                    gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
+                }
+            } else if (type.contains(QLatin1String("probe"))) {
+                gcode += QStringLiteral("G0 X%1 Y%2\n").arg(x0, 0, 'f', 3).arg(cy, 0, 'f', 3);
+                gcode += QStringLiteral("G31 X%1 F100\n").arg(x0 + inset, 0, 'f', 3);
+                gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
+                gcode += QStringLiteral("G0 X%1 Y%2\n").arg(cx, 0, 'f', 3).arg(y0, 0, 'f', 3);
+                gcode += QStringLiteral("G31 Y%1 F100\n").arg(y0 + inset, 0, 'f', 3);
+            } else if (type.startsWith(QLatin1String("turning")) || type.contains(QLatin1String("turn"))) {
+                // Lathe-style XZ stub along stock length (X) at Z levels
+                gcode += QStringLiteral("G18\n"); // XZ plane
+                for (double z = z1 - step; z >= z0; z -= step) {
+                    gcode += QStringLiteral("G0 X%1 Z%2\n").arg(x1, 0, 'f', 3).arg(z, 0, 'f', 3);
+                    gcode += QStringLiteral("G1 X%1 F%2\n").arg(x0, 0, 'f', 3).arg(feed, 0, 'f', 1);
+                }
+                gcode += QStringLiteral("G17\n");
+            } else if (type == QLatin1String("face") || type.contains(QLatin1String("flat"))) {
+                // Zigzag face on top of stock
+                const double z = z1 - step;
+                const int passes = std::max(2, int((y1 - y0) / std::max(1.0, step * 2)));
+                bool flip = false;
+                for (int i = 0; i <= passes; ++i) {
+                    const double y = y0 + (y1 - y0) * (double(i) / passes);
+                    const double xa = flip ? x1 : x0;
+                    const double xb = flip ? x0 : x1;
+                    gcode += QStringLiteral("G0 X%1 Y%2\n").arg(xa, 0, 'f', 3).arg(y, 0, 'f', 3);
+                    if (i == 0)
+                        gcode += QStringLiteral("G1 Z%1 F%2\n").arg(z, 0, 'f', 3).arg(feed, 0, 'f', 1);
+                    gcode += QStringLiteral("G1 X%1 Y%2 F%3\n").arg(xb, 0, 'f', 3).arg(y, 0, 'f', 3).arg(feed, 0, 'f', 1);
+                    flip = !flip;
+                }
+            } else if (type.contains(QLatin1String("pocket")) || type.contains(QLatin1String("adaptive"))
+                       || type.contains(QLatin1String("engrave")) || type.contains(QLatin1String("slot"))) {
+                // Concentric insets
+                for (int ring = 0; ring < 3; ++ring) {
+                    const double m = inset * (ring + 1);
+                    appendBox(gcode, x0 + m, y0 + m, x1 - m, y1 - m, z1 - step * (ring + 1), feed);
+                }
+            } else if (type.contains(QLatin1String("3d")) || type.contains(QLatin1String("parallel"))
+                       || type.contains(QLatin1String("scallop")) || type.contains(QLatin1String("spiral"))
+                       || type.contains(QLatin1String("radial")) || type.contains(QLatin1String("pencil"))
+                       || type.contains(QLatin1String("morph")) || type.contains(QLatin1String("flow"))
+                       || type.contains(QLatin1String("blend")) || type.contains(QLatin1String("ramp"))
+                       || type.contains(QLatin1String("steep")) || type.contains(QLatin1String("project"))) {
+                for (double z = z1 - step; z >= z0; z -= step)
+                    appendBox(gcode, x0 + inset, y0 + inset, x1 - inset, y1 - inset, z, feed);
+            } else if (type.contains(QLatin1String("swarf")) || type.contains(QLatin1String("multi"))
+                       || type.contains(QLatin1String("rotary")) || type.contains(QLatin1String("wrap"))) {
+                gcode += QStringLiteral("(Multi-axis stub — planar contour only)\n");
+                appendBox(gcode, x0, y0, x1, y1, z0 + step, feed);
+            } else {
+                // Contour / chamfer / thread / trace / default
+                appendBox(gcode, x0, y0, x1, y1, z0 + step, feed);
+            }
         }
         gcode += QStringLiteral("G0 Z%1\n").arg(zSafe, 0, 'f', 3);
+        if (!type.contains(QLatin1String("probe")))
+            gcode += QStringLiteral("M5\n");
     }
-    gcode += QStringLiteral("M5\nM30\n");
+    gcode += QStringLiteral("M30\n");
 
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {

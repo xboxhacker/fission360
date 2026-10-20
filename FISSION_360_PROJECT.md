@@ -177,15 +177,15 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - A self-test or UI-test process left running locks the exe and the next link fails with LNK1104: `Get-Process Fission360 | Stop-Process -Force` before building, and start test runs with a timeout (`$p.WaitForExit(300000)`)
 
 ## Current State
-*(Source at version **1.13.26** — render crash, face-pattern cut, shell pick, Ctrl+Y filter.
-- **Version 1.13.26** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
+*(Source at version **1.13.28** — Manufacture catalog finished (setups/tools/ops/post/simulate).
+- **Version 1.13.28** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
 - **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
 - Last built binary: `build-rel\Release\Fission360.exe` from **1.13.12** (links `Qt6::Test` / `Qt6::Network` / `Qt6::WebEngineQuick`). Refresh runnable copy with robocopy into `dist\Fission360\`
 - Self-tests: **339/1** at 1.13.6; UI walkthrough last recorded at 163 checks when Drawing scaffolding landed
 - **Save**: Compact JSON once, chunked write + progress (large Fusion exports stay responsive); `testLargeFileSave` (~11 MB synthetic)
-- **Phases done:** 1–3, 5 (mesh except organic convert), 6 (import/export + Fusion), 7 (sheet metal), 8 (scripts), 9 (drawing), **10 (Render & Appearance)**; Phase 12 **Send to Orca** (thin handoff). **Open:** Phase 4 leftovers (curvature comb, …), Phase 5 organic mesh convert, Phase 11 sync, Phase 12 native MFG tools
+- **Phases done:** 1–3, 5 (mesh except organic convert), 6 (import/export + Fusion), 7 (sheet metal), 8 (scripts), 9 (drawing), **10 (Render & Appearance)**; Phase 12 **Send to Orca** (thin handoff). **Open:** Phase 4 leftovers (curvature comb, …), Phase 5 organic mesh convert, Phase 11 sync; Phase 12 MFG catalog wired (true CAM kernel / collision sim / mfg model still later)
 - **Phase 10 Render & Appearance ✅** — **DESIGN ▾ → Render** workspace; floating Appearance (visible bodies if nothing selected); live viewport shading; HDRI/IBL; path tracer + supersample capture. Sketch: Trim paint-delete drag; Snap to grid toggle — see "Render & Assets" below
 - Status bar progress bar for long operations (`FissionProgress` → `fissionApp.busy / progressText / progressValue`); mesh Convert and Face Groups ▸ Accurate of large meshes run on a worker thread and report through it; **Save** reports through it too (large Fusion exports); scripts can run their own tasks (`fission.beginTask / reportProgress / endTask`)
 - **Perf (pending rebuild):** McMaster/WebEngine lazy-loaded; shell assoc deferred; rebuild 16 ms / tessellate 32 ms debounce — see CHANGELOG Unreleased
@@ -445,21 +445,21 @@ Keep Fission light: **do not** link `libslic3r` / embed Orca into the CAD proces
 - [ ] Optional: remember last Orca path / “Open cache folder for prints”
 - [ ] Optional: arrange / orient hints via Orca CLI flags
 
-#### MFG workspace (Fusion-like — wire later)
+#### MFG workspace (Fusion-like)
 - [x] **MANUFACTURE** workspace under **DESIGN ▾** (separate from Design / Render; its own MANUFACTURE tab) *(1.13.12)*
-- [x] **Setup** — *(scaffold 1.13.25: New Setup + stock from bounds)*  New Setup, Work Coordinate System (WCS), stock / fixtures, machine selection
-- [x] **Tool Library** — *(scaffold 1.13.25: tools on design)*  mills, drills, taps, holders; feeds & speeds
-- [x] **2D milling** — *(scaffold 1.13.25: ops recorded; toolpaths TBD)*  Face, 2D Adaptive, 2D Pocket, 2D Contour, Slot, Trace, Bore, Circular, Engrave, Chamfer, Thread
-- [x] **Drilling** — *(scaffold 1.13.25)*  Drill, Tap, Thread mill; hole recognition
-- [x] **3D milling** — *(scaffold 1.13.25: ops recorded)*  Adaptive Clearing, Pocket Clearing, Parallel, Contour, Flat, Scallop, Radial, Spiral, Morphed Spiral, Pencil, Ramp, Steep & Shallow, Project, Morph, Flow, Blend
-- [ ] **Multi-axis** — Swarf, Multi-Axis Contour, Rotary / wrap
-- [x] **Turning** — *(scaffold 1.13.25: ops recorded)*  Facing, Profiling, Grooving, Parting, Threading, Adaptive roughing
+- [x] **Setup** — New Setup, WCS, stock offset + refresh from bounds, machine selection *(1.13.28)*
+- [x] **Tool Library** — mills, drills, taps, turning, probe; editable feeds & speeds *(1.13.28)*
+- [x] **2D milling** — Face, 2D Adaptive, 2D Pocket, 2D Contour, Slot, Trace, Bore, Circular, Engrave, Chamfer, Thread *(catalog + stock NC stubs 1.13.28)*
+- [x] **Drilling** — Drill, Tap, Thread mill *(1.13.28)*
+- [x] **3D milling** — Adaptive / Pocket Clearing, Parallel, Contour, Flat, Scallop, Radial, Spiral, Morphed Spiral, Pencil, Ramp, Steep & Shallow, Project, Morph, Flow, Blend *(1.13.28)*
+- [x] **Multi-axis** — Swarf, Multi-Axis Contour, Rotary / wrap *(ops + planar NC stub 1.13.28; true multi-axis TBD)*
+- [x] **Turning** — Facing, Profiling, Grooving, Parting, Threading, Adaptive roughing *(XZ stub 1.13.28)*
 - [ ] **Additive (in-app)** — print setup / supports (beyond Send to Orca), if needed later
-- [ ] **Probing** — WCS / geometry probe operations
-- [x] **Simulate** — *(scaffold 1.13.25: op/stock report)*  toolpath / stock simulation, collisions
-- [x] **Post Process** — *(scaffold 1.13.25: placeholder G-code)*  NC Program, post config, G-code export
+- [x] **Probing** — Probe WCS / Probe Geometry *(G31 stub 1.13.28)*
+- [x] **Simulate** — per-op path-length estimate from stock + type *(1.13.28; no collision yet)*
+- [x] **Post Process** — op-type-aware stock NC export *(1.13.28; not a full CAM post)*
 - [ ] **Manufacturing Model** — isolated edits for manufacture without changing the design
-- [ ] **Folders / patterns** — CAM folders, pattern toolpaths, templates
+- [x] **Folders** — op folder labels *(1.13.28; patterns/templates TBD)*
 
 ---
 

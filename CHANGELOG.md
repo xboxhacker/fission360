@@ -16,6 +16,17 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.28 — Manufacture tools finished
+- Full MFG catalog in toolbar / panel / command search: 2D, drill, 3D, multi-axis, turning, probe.
+- Setup inspector (machine, WCS, stock offset) + **Refresh Stock** from body bounds.
+- Tool library presets + editable type/Ø/feeds; ops get folder, tool pick, enable/disable, feed/speed/stepdown.
+- **Simulate** per-op path estimate; **Post** writes op-type stock NC stubs (face zigzag, pocket insets, drill points, turning XZ, probe G31).
+### 1.13.27 — Drawing workspace redesign (Fusion-like)
+- Sheet **pan** (mid/right-drag) and **zoom** (wheel); Fit Sheet (F).
+- **Base View** orientation bar + ghost preview; auto-places Front on empty sheets.
+- **Projected views**: Shift+drag from a parent toward a direction (third/first-angle aware).
+- Views float on the paper (no card chrome); floating **view inspector** (scale, hidden lines).
+- Clearer HUD prompts; dimension rubber-band with arrowheads.
 ### 1.13.26 — render crash; face pattern cut; shell pick; Ctrl+Y
 - **Path-trace export**: mesh a private face copy (no live-shape remesh race), guard camera/resolution, catch OCCT failures.
 - **Pattern faces**: select a hole face → Rectangular/Circular pattern **Cuts** more holes into the body (cylinder / extruded-face tools).
