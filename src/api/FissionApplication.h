@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QQuickItem>
+#include <QNetworkAccessManager>
 #include "kernel/FissionDocument.h"
 #include "kernel/drawing/DrawingManager.h"
 
@@ -93,6 +94,13 @@ public:
     // A file or folder moved or renamed: open designs inside follow it
     void relocate(const QString &from, const QString &to);
 
+    // Compare FISSION_VERSION to GitHub latest release (async). Emits updateAvailable when newer.
+    Q_INVOKABLE void checkForUpdates(bool force = false);
+    Q_INVOKABLE void openUpdateUrl(const QString &url);
+    Q_INVOKABLE void skipUpdateVersion(const QString &version);
+    // -1 if a < b, 0 if equal, 1 if a > b (dotted numeric, strips leading 'v')
+    Q_INVOKABLE int compareVersions(const QString &a, const QString &b) const;
+
 signals:
     void activeDocumentChanged();
     void documentsChanged();
@@ -103,6 +111,9 @@ signals:
     // Slicer search: each match as {slicer, path, modified}; finished once with the full list
     void slicerSearchProgress(const QString &where);
     void slicerSearchFinished(const QVariantList &results, bool cancelled);
+    // GitHub release newer than this build: version (no v), html_url, name/body snippet
+    void updateAvailable(const QString &version, const QString &url, const QString &summary);
+    void updateCheckFinished(bool newerAvailable, const QString &latestVersion);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -125,4 +136,6 @@ private:
     DrawingManager *m_drawingManager = nullptr;
     QTimer m_autosaveTimer;
     int m_autosaveSec = 120;
+    QNetworkAccessManager m_updateNam;
+    bool m_updateCheckBusy = false;
 };

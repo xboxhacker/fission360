@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "ScriptHost.h"
+#include "CommandRegistry.h"
 #include "FissionApplication.h"
 #include "PythonHost.h"
 
@@ -294,6 +295,9 @@ QVariantMap ScriptHost::runCommand(const QString &id) {
             refresh.call({m_engine->newQObject(fa->activeDocument()), m_app ? m_engine->newQObject(m_app) : QJSValue()});
         return guardedCall([&] { return fn.call(); }, 30000);
     }
+    // Fall through to the shared CommandRegistry (MCP / CLI surface)
+    if (CommandRegistry::instance()->hasCommand(id))
+        return CommandRegistry::instance()->execute(id, {});
     return {{"ok", false}, {"output", QStringList()}, {"error", "Unknown command " + id}, {"line", 0}};
 }
 

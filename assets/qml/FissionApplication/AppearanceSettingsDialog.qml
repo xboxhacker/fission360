@@ -77,15 +77,19 @@ Popup {
         topColor = fissionApp.setting("viewport/backgroundTop", "#3c4148")
         bottomColor = fissionApp.setting("viewport/backgroundBottom", "#1e2125")
         zoomCursorBox.checked = !!(app && app.zoomToCursor)
+        showGridBox.checked = fissionApp.setting("viewport/showGrid", true) !== false
+            && fissionApp.setting("viewport/showGrid", true) !== "false"
         apply()
     }
     function apply() {
         if (app && app.viewport && app.viewport.renderer) {
             app.viewport.renderer.backgroundTop = topColor
             app.viewport.renderer.backgroundBottom = bottomColor
+            app.viewport.renderer.showGrid = showGridBox.checked
         }
         fissionApp.setSetting("viewport/backgroundTop", topColor.toString())
         fissionApp.setSetting("viewport/backgroundBottom", bottomColor.toString())
+        fissionApp.setSetting("viewport/showGrid", showGridBox.checked)
     }
     function preset(top, bottom) {
         topColor = top
@@ -191,6 +195,24 @@ Popup {
             }
             Text {
                 text: "When on, the mouse wheel zooms toward the pointer instead of the view centre."
+                color: Theme.textDim
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            CheckBox {
+                id: showGridBox
+                text: "Show viewport grid"
+                checked: true
+                onToggled: {
+                    fissionApp.setSetting("viewport/showGrid", checked)
+                    if (app && app.viewport && app.viewport.renderer)
+                        app.viewport.renderer.showGrid = checked
+                }
+            }
+            Text {
+                text: "Ground grid and origin axis in the 3D view. The viewport Grid button toggles the same setting."
                 color: Theme.textDim
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap

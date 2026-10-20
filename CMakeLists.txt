@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Fission360 VERSION 1.13.28 LANGUAGES CXX)
+project(Fission360 VERSION 1.13.30 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -151,6 +151,8 @@ qt_add_resources(Fission360 "fission_qml"
         "${FISSION_QML_DIR}/THIRD_PARTY_NOTICES.md"
         "${FISSION_QML_DIR}/FissionApplication/qmldir"
         "${FISSION_QML_DIR}/FissionApplication/AboutDialog.qml"
+        "${FISSION_QML_DIR}/FissionApplication/UpdateAvailableDialog.qml"
+        "${FISSION_QML_DIR}/FissionApplication/ExportViewportPngDialog.qml"
         "${FISSION_QML_DIR}/FissionApplication/Theme.qml"
         "${FISSION_QML_DIR}/FissionApplication/FloatingPanel.qml"
         "${FISSION_QML_DIR}/FissionApplication/MainWindow.qml"

@@ -94,9 +94,9 @@ The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python
 
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history, autosave, and **Send to Slicer** are in. Up next: CAM (toolpaths, post-processing, simulation) and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history, autosave, **Send to Slicer**, and a headless **MCP** server (`Fission360 --mcp`) are in. Up next: real CAM toolpaths and optional lock/sync.
 
-Peer ideas we may re-implement (command registry, MCP, oracle tests, better installers) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md).
+MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md).
 
 More detail: [`CHANGELOG.md`](CHANGELOG.md) · [`FISSION_360_PROJECT.md`](FISSION_360_PROJECT.md)
 

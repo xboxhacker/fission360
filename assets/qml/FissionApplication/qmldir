@@ -17,7 +17,11 @@ DocumentSettingsDialog 1.0 DocumentSettingsDialog.qml
 CommandSearch 1.0 CommandSearch.qml
 ShortcutsDialog 1.0 ShortcutsDialog.qml
 AboutDialog 1.0 AboutDialog.qml
+UpdateAvailableDialog 1.0 UpdateAvailableDialog.qml
+ExportViewportPngDialog 1.0 ExportViewportPngDialog.qml
 ScriptsDialog 1.0 ScriptsDialog.qml
+ManufactureDialog 1.0 ManufactureDialog.qml
+AppearanceSettingsDialog 1.0 AppearanceSettingsDialog.qml
 UiTest 1.0 UiTest.qml
 UiPerf 1.0 UiPerf.qml
 BatchExportDialog 1.0 BatchExportDialog.qml

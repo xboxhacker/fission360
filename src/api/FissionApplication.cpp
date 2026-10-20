@@ -7,11 +7,17 @@
 #include "kernel/FissionProgress.h"
 #include <QBuffer>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QEvent>
 #include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPointer>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QSet>
 #include <QThread>
@@ -556,4 +562,89 @@ bool FissionApplication::exportDocument(const QString &pathOrUrl) {
     }
     showMessage(QString("Exported %1").arg(QFileInfo(path).fileName()));
     return true;
+}
+
+int FissionApplication::compareVersions(const QString &aIn, const QString &bIn) const {
+    auto norm = [](QString s) {
+        s = s.trimmed();
+        if (s.startsWith(QLatin1Char('v'), Qt::CaseInsensitive)) s = s.mid(1);
+        // Drop pre-release / build metadata for ordering
+        const int cut = s.indexOf(QRegularExpression(QStringLiteral("[+-]")));
+        if (cut >= 0) s = s.left(cut);
+        return s;
+    };
+    const QStringList aa = norm(aIn).split(QLatin1Char('.'), Qt::SkipEmptyParts);
+    const QStringList bb = norm(bIn).split(QLatin1Char('.'), Qt::SkipEmptyParts);
+    const int n = std::max(aa.size(), bb.size());
+    for (int i = 0; i < n; ++i) {
+        const int av = i < aa.size() ? aa[i].toInt() : 0;
+        const int bv = i < bb.size() ? bb[i].toInt() : 0;
+        if (av < bv) return -1;
+        if (av > bv) return 1;
+    }
+    return 0;
+}
+
+void FissionApplication::skipUpdateVersion(const QString &version) {
+    setSetting(QStringLiteral("updates/skipVersion"), version.trimmed());
+}
+
+void FissionApplication::openUpdateUrl(const QString &url) {
+    if (url.isEmpty()) return;
+    QDesktopServices::openUrl(QUrl(url));
+}
+
+void FissionApplication::checkForUpdates(bool force) {
+    if (m_updateCheckBusy) return;
+    if (!force && setting(QStringLiteral("updates/checkEnabled"), true).toBool() == false) {
+        emit updateCheckFinished(false, QString());
+        return;
+    }
+    m_updateCheckBusy = true;
+    QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/xboxhacker/fission360/releases/latest")));
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  QStringLiteral("Fission360/%1 (update-check)").arg(QStringLiteral(FISSION_VERSION)));
+    req.setRawHeader("Accept", "application/vnd.github+json");
+    // Avoid hanging the UI forever on offline networks
+    req.setTransferTimeout(12000);
+    auto *reply = m_updateNam.get(req);
+    QPointer<FissionApplication> self(this);
+    connect(reply, &QNetworkReply::finished, this, [self, reply, force] {
+        reply->deleteLater();
+        if (!self) return;
+        self->m_updateCheckBusy = false;
+        if (reply->error() != QNetworkReply::NoError) {
+            emit self->updateCheckFinished(false, QString());
+            return;
+        }
+        const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+        QString tag = obj.value(QStringLiteral("tag_name")).toString();
+        if (tag.startsWith(QLatin1Char('v'), Qt::CaseInsensitive)) tag = tag.mid(1);
+        const QString url = obj.value(QStringLiteral("html_url")).toString();
+        QString summary = obj.value(QStringLiteral("name")).toString();
+        if (summary.isEmpty()) summary = QStringLiteral("Fission 360 %1").arg(tag);
+        const QString body = obj.value(QStringLiteral("body")).toString().trimmed();
+        if (!body.isEmpty()) {
+            QString first = body.section(QLatin1Char('\n'), 0, 2).trimmed();
+            if (first.size() > 280) first = first.left(277) + QStringLiteral("…");
+            if (!first.isEmpty()) summary += QStringLiteral("\n\n") + first;
+        }
+        if (tag.isEmpty() || url.isEmpty()) {
+            emit self->updateCheckFinished(false, QString());
+            return;
+        }
+        const QString current = QStringLiteral(FISSION_VERSION);
+        const bool newer = self->compareVersions(current, tag) < 0;
+        if (!newer) {
+            emit self->updateCheckFinished(false, tag);
+            return;
+        }
+        const QString skipped = self->setting(QStringLiteral("updates/skipVersion")).toString();
+        if (!force && !skipped.isEmpty() && self->compareVersions(skipped, tag) >= 0) {
+            emit self->updateCheckFinished(false, tag);
+            return;
+        }
+        emit self->updateAvailable(tag, url, summary);
+        emit self->updateCheckFinished(true, tag);
+    });
 }

@@ -16,6 +16,14 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.30 — Update check, viewport PNG export, grid setting
+- Startup check against GitHub latest release; popup to download when newer (Skip / Later).
+- **File ▸ Export Viewport PNG**: size dialog, fast grab without grid.
+- **Display Settings**: Show viewport grid toggle (persisted; syncs with viewport Grid button).
+### 1.13.29 — Command registry + MCP server
+- `CommandRegistry`: shared dotted commands (doc / feature / measure / param / edit) for scripts, QML (`fissionCommands`), and agents.
+- `Fission360 --mcp`: headless MCP over stdio (Content-Length JSON-RPC) — list_commands, execute, batch, inspect, measure, export, open/save, undo/redo, set_parameter.
+- Path sandbox: home, temp, open design folder, plus `--allow-path` / `--allow-any-path`. Docs: `docs/mcp.md`.
 ### 1.13.28 — Manufacture tools finished
 - Full MFG catalog in toolbar / panel / command search: 2D, drill, 3D, multi-axis, turning, probe.
 - Setup inspector (machine, WCS, stock offset) + **Refresh Stock** from body bounds.

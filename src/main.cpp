@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDir>
 #include <QIcon>
 #include <QGuiApplication>
@@ -15,7 +16,9 @@
 #include <cstdio>
 #include <OSD.hxx>
 
+#include "api/CommandRegistry.h"
 #include "api/FissionApplication.h"
+#include "api/McpServer.h"
 #include "api/ProjectBrowser.h"
 #include "api/ScriptHost.h"
 #include "app/SelfTest.h"
@@ -54,10 +57,41 @@ int main(int argc, char *argv[]) {
         g_log = std::fopen(qgetenv("FISSION_LOG").constData(), "a");
         if (g_log) qInstallMessageHandler(logMessage);
     }
+    bool mcpMode = false;
     for (int i = 1; i < argc; ++i) {
         const QByteArray arg(argv[i]);
         if (arg == "--screenshot" || arg == "--uitest" || arg == "--uiperf") qputenv("QSG_RENDER_LOOP", "basic");
+        if (arg == "--mcp") mcpMode = true;
     }
+
+    // Headless MCP: no window, no WebEngine — CommandRegistry over stdio JSON-RPC
+    if (mcpMode) {
+        QCoreApplication app(argc, argv);
+        app.setApplicationName("Fission 360");
+        app.setApplicationVersion(FISSION_VERSION);
+        app.setOrganizationName("FissionCAD");
+        OSD::SetSignal(false);
+
+        QCommandLineParser parser;
+        parser.setApplicationDescription("Fission 360 MCP server (stdio)");
+        parser.addHelpOption();
+        QCommandLineOption mcpOpt("mcp", "Run as a Model Context Protocol server on stdio.");
+        QCommandLineOption inOpt("in", "Open a design before serving.", "file");
+        QCommandLineOption allowPath("allow-path", "Allow agent file access under DIR (repeatable).", "dir");
+        QCommandLineOption allowAny("allow-any-path", "Disable MCP path sandbox (not recommended).");
+        parser.addOptions({mcpOpt, inOpt, allowPath, allowAny});
+        parser.process(app);
+
+        FissionApplication *fissionApp = FissionApplication::instance();
+        CommandRegistry::instance()->registerBuiltins(fissionApp);
+
+        McpServer::Options opts;
+        opts.openPath = parser.value(inOpt);
+        opts.allowPaths = parser.values(allowPath);
+        opts.allowAnyPath = parser.isSet(allowAny);
+        return McpServer::run(fissionApp, opts);
+    }
+
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QSurfaceFormat fmt;
     fmt.setVersion(3, 3);
@@ -110,6 +144,7 @@ int main(int argc, char *argv[]) {
     }
 
     FissionApplication *fissionApp = FissionApplication::instance();
+    CommandRegistry::instance()->registerBuiltins(fissionApp);
     const QStringList designs = parser.positionalArguments();
     if (parser.isSet(open)) fissionApp->openDocument(parser.value(open));
     else if (!designs.isEmpty()) for (const QString &d : designs) fissionApp->openDocument(d);
@@ -145,6 +180,7 @@ int main(int argc, char *argv[]) {
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("fissionApp", fissionApp);
+    engine.rootContext()->setContextProperty("fissionCommands", CommandRegistry::instance());
     engine.rootContext()->setContextProperty("projects", &projects);
     engine.rootContext()->setContextProperty("fissionScripts", new ScriptHost(&engine, &engine));
     engine.rootContext()->setContextProperty("uiTest", &uiTest);

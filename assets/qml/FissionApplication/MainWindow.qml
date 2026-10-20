@@ -1094,11 +1094,23 @@ ApplicationWindow {
         sketchSnapToGrid = fissionApp.setting("sketch/snapToGrid", true) !== false
             && fissionApp.setting("sketch/snapToGrid", true) !== "false"
         Qt.callLater(() => {
-            if (viewportItem && viewportItem.renderer)
+            if (viewportItem && viewportItem.renderer) {
                 viewportItem.renderer.snapToGrid = sketchSnapToGrid
+                const g = fissionApp.setting("viewport/showGrid", true)
+                viewportItem.renderer.showGrid = g !== false && g !== "false"
+            }
             fissionScripts.startAddIns(win)
             // Recover Autosave is File-menu only (no startup prompt)
+            // Version check against GitHub latest (skip scripted UI tests)
+            if (!(uiTest && uiTest.enabled))
+                Qt.callLater(() => fissionApp.checkForUpdates(false))
         })
+    }
+    Connections {
+        target: fissionApp
+        function onUpdateAvailable(version, url, summary) {
+            updateAvailableDialog.showUpdate(version, url, summary)
+        }
     }
     function setZoomToCursor(on) {
         zoomToCursor = !!on
@@ -1658,6 +1670,7 @@ ApplicationWindow {
             cmd("Post Process", "", "Manufacture", "model", () => mfgPostProcess()),
             cmd("Manufacture Panel", "", "Manufacture", "any", () => openManufacture()),
             cmd("Export", "", "File", "any", () => exportFile()),
+            cmd("Export Viewport PNG", "", "File", "any", () => exportViewportPng()),
             cmd("Undo", "Ctrl+Z", "Edit", "any", () => doc.undo()),
             cmd("Redo", "Ctrl+Y", "Edit", "any", () => doc.redo()),
             cmd("Show/Hide Browser", "Ctrl+Alt+B", "Window", "any", () => { showBrowser = !showBrowser }),
@@ -1696,6 +1709,7 @@ ApplicationWindow {
         projectsDrawer.show(p.length ? p.substring(0, p.lastIndexOf("/")) : projects.root)
     }
     function exportFile() { exportDialog.open() }
+    function exportViewportPng() { exportViewportPngDialog.openForExport() }
     function openParameters() { parametersDialog.open() }
     function closeParameters() { parametersDialog.close() }
     function openVersionHistory() { versionHistoryDialog.open() }
@@ -2008,6 +2022,8 @@ ApplicationWindow {
     CommandSearch { id: commandSearch; app: win }
     ShortcutsDialog { id: shortcutsDialog; app: win }
     AboutDialog { id: aboutDialog; app: win }
+    UpdateAvailableDialog { id: updateAvailableDialog }
+    ExportViewportPngDialog { id: exportViewportPngDialog; app: win }
     ScriptsDialog { id: scriptsDialog; app: win }
     SheetMetalRulesDialog { id: sheetRulesDialog; app: win }
     property alias scriptsPopup: scriptsDialog

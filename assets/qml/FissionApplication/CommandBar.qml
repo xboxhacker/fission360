@@ -56,6 +56,7 @@ Rectangle {
                 MenuItem { text: "Recover Autosave..."; onTriggered: bar.app.openRecoverAutosave() }
                 MenuItem { text: "Send to Slicer..."; onTriggered: bar.app.sendToOrca() }
                 MenuItem { text: "Export (STEP / IGES / STL / OBJ / 3MF)..."; onTriggered: bar.app.exportFile() }
+                MenuItem { text: "Export Viewport PNG..."; onTriggered: bar.app.exportViewportPng() }
                 MenuItem { text: "Batch Export..."; onTriggered: bar.app.openBatchExport() }
                 MenuItem { text: "Export Face / Sketch as DXF..."; onTriggered: bar.app.exportDxf() }
                 MenuSeparator {}

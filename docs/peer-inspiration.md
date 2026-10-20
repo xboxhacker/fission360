@@ -67,8 +67,8 @@ Prioritised for Fission’s existing C++/Qt/OCCT stack.
 
 ## Suggested Fission roadmap chips (from this review)
 
-- [ ] Formal `CommandRegistry` (string id → invoke) used by Toolbar, ScriptHost, and CLI  
-- [ ] `fission-cli` or `Fission360 --mcp` MVP (list_commands, execute, measure, export, screenshot)  
+- [x] Formal `CommandRegistry` (string id → invoke) — QML `fissionCommands`, ScriptHost fall-through, MCP *(1.13.29)*  
+- [x] `Fission360 --mcp` MVP (list_commands, execute, batch, measure, export, open/save, …) — see `docs/mcp.md` *(1.13.29; screenshot / --connect later)*  
 - [ ] Oracle suite: 10 public STEP parts, volume/CoM vs FreeCAD or analytic  
 - [ ] Windows MSI + `winget` manifest  
 - [ ] Help → Report Issue (pre-filled body: version, OS, last error)  

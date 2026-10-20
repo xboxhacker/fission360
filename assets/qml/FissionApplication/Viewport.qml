@@ -39,7 +39,7 @@ Item {
 
     BRepRenderer {
         id: r
-        anchors.fill: parent
+            anchors.fill: parent
         document: vp.app.doc
         camera: vp.app.camera
         selection: vp.app.selection
@@ -76,6 +76,8 @@ Item {
             backgroundTop = fissionApp.setting("viewport/backgroundTop", "#3c4148")
             backgroundBottom = fissionApp.setting("viewport/backgroundBottom", "#1e2125")
             snapToGrid = vp.app ? vp.app.sketchSnapToGrid : true
+            const g = fissionApp.setting("viewport/showGrid", true)
+            showGrid = g !== false && g !== "false"
         }
     }
 
@@ -1895,13 +1897,13 @@ Item {
         pointHover = ({})
         req.done(req.sketch ? [p.u, p.v] : [p.x, p.y, p.z], p.label)
     }
-    Canvas {
+        Canvas {
         id: pointCanvas
-        anchors.fill: parent
+            anchors.fill: parent
         z: 6
         visible: !!vp.app.pointPick
         onVisibleChanged: requestPaint()
-        onPaint: {
+            onPaint: {
             const c = getContext("2d")
             c.reset()
             const p = vp.pointHover
@@ -2203,7 +2205,14 @@ Item {
             Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: Theme.border }
             ToolbarButton { compact: true; glyph: "ortho"; tip: "Orthographic projection"
                 checked: vp.app.camera.orthographic; onClicked: vp.app.camera.orthographic = !vp.app.camera.orthographic }
-            ToolbarButton { compact: true; glyph: "grid"; tip: "Grid"; checked: r.showGrid; onClicked: r.showGrid = !r.showGrid }
+            ToolbarButton {
+                compact: true; glyph: "grid"; tip: "Grid"
+                checked: r.showGrid
+                onClicked: {
+                    r.showGrid = !r.showGrid
+                    fissionApp.setSetting("viewport/showGrid", r.showGrid)
+                }
+            }
             ToolbarButton { compact: true; glyph: "edges"; tip: "Visible edges"; checked: r.showEdges; onClicked: r.showEdges = !r.showEdges }
             ToolbarButton {
                 id: meshDisplayButton
