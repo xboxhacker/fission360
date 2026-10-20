@@ -152,7 +152,8 @@ Rectangle {
         "-",
         act("Properties", "properties", () => { app.showProperties = !app.showProperties }, "", () => app.showProperties),
         act("Keyboard Shortcuts", "keyboard", () => app.openShortcuts(), "Keyboard shortcuts (press S to search commands)"),
-        act("About Fission 360", "info", () => app.openAbout(), "About Fission 360 (GPLv3)")
+        act("About Fission 360", "info", () => app.openAbout(), "About Fission 360 (GPLv3)"),
+        act("Report Bug", "bug", () => fissionApp.reportBug(), "Open a GitHub issue with version and status pre-filled")
     ] })
 
     readonly property var tabs: ({
@@ -314,7 +315,8 @@ Rectangle {
                 act("Live Render", "view", () => app.toggleLiveRender(), "Live shading in the design viewport"),
                 act("Render Settings", "settings", () => app.openRenderSettings(), "Floating Render settings panel"),
                 act("Keyboard Shortcuts", "keyboard", () => app.openShortcuts()),
-                act("About Fission 360", "info", () => app.openAbout(), "About Fission 360 — version and GPLv3 license")
+                act("About Fission 360", "info", () => app.openAbout(), "About Fission 360 — version and GPLv3 license"),
+                act("Report Bug", "bug", () => fissionApp.reportBug(), "Open a GitHub issue with version and status pre-filled")
             ] },
             { title: "ADD-INS", quick: 1 + Math.min(3, fissionScripts.commands.length), items: [
                 act("Scripts and Add-Ins", "script", () => app.openScripts(),

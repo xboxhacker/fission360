@@ -100,6 +100,8 @@ public:
     Q_INVOKABLE void skipUpdateVersion(const QString &version);
     // -1 if a < b, 0 if equal, 1 if a > b (dotted numeric, strips leading 'v')
     Q_INVOKABLE int compareVersions(const QString &a, const QString &b) const;
+    // Opens GitHub new-issue form for xboxhacker/fission360 with version / OS / last status pre-filled
+    Q_INVOKABLE void reportBug();
 
 signals:
     void activeDocumentChanged();

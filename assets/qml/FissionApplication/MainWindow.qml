@@ -1678,7 +1678,8 @@ ApplicationWindow {
             cmd("Show/Hide Navigation Bar", "Ctrl+Alt+N", "Window", "any", () => { showNavBar = !showNavBar }),
             cmd("Reset to Default Layout", "Ctrl+Alt+R", "Window", "any", () => resetLayout()),
             cmd("Keyboard Shortcuts", "", "Help", "any", () => shortcutsDialog.open()),
-            cmd("About Fission 360", "", "Help", "any", () => aboutDialog.open())
+            cmd("About Fission 360", "", "Help", "any", () => aboutDialog.open()),
+            cmd("Report Bug", "", "Help", "any", () => fissionApp.reportBug())
         ]
     }
     function resetLayout() {

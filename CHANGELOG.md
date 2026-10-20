@@ -16,6 +16,14 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.32 — Report Bug + SolidCraft issue parity tests
+- **Report Bug** in the top command bar (bug glyph), File menu, Help command search, INSPECT / UTILITIES: opens a GitHub new-issue form for `xboxhacker/fission360` with version, OS, last status, and unhealthy feature errors pre-filled.
+- **Selftest** `testSolidCraftParity`: geometry recipes inspired by public SolidCraft kernel issues (#3541 loft, #3578/#3526 combine, #3528 revolve seam cut, #3573 taper+fillet shell, #3561/#3587 oversized blends, #3563 extrude join/through-all). See `docs/solidcraft-issue-parity.md`.
+
+### 1.13.31 — Shell on sloped / ridge faces
+- **Shell**: retries in OCCT complete-intersection mode (intersection joins, 1e-7 then 1e-4) when the default arc-join offset fails, so planar bodies whose narrow faces vanish under the wall offset (hip-roof ridge strips, pyramid apexes) now shell like in Fusion. Results are validity- and volume-checked; OCCT exceptions are caught. The closed (no-opening) hollow gets the same retry.
+- Selftest: hip-roof box (2 mm ridge) shelled through a sloped face at 2 mm.
+
 ### 1.13.30 — Update check, viewport PNG export, grid setting
 - Startup check against GitHub latest release; popup to download when newer (Skip / Later).
 - **File ▸ Export Viewport PNG**: size dialog, fast grab without grid.

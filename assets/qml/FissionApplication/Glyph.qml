@@ -238,6 +238,18 @@ Item {
             circle(c, 12, 7.5, 1.2, true)
             poly(c, [[12, 10.5], [12, 17.5]], false, false)
             break
+        case "bug":
+            // Simple bug: oval body, head, legs, antennae — for Report Bug
+            circle(c, 12, 8, 3.2, true)
+            poly(c, [[7, 11], [17, 11], [16, 18], [8, 18]], true, true)
+            poly(c, [[9, 5], [6, 2]], false, false)
+            poly(c, [[15, 5], [18, 2]], false, false)
+            poly(c, [[7, 12], [3, 11]], false, false)
+            poly(c, [[7, 15], [3, 16]], false, false)
+            poly(c, [[17, 12], [21, 11]], false, false)
+            poly(c, [[17, 15], [21, 16]], false, false)
+            poly(c, [[12, 11], [12, 18]], false, false)
+            break
         case "selwindow":
             c.setLineDash([3, 2]); poly(c, [[3, 4], [19, 4], [19, 15], [3, 15]], true, false); c.setLineDash([])
             poly(c, [[13, 11], [13, 22], [16, 19], [19, 23], [21, 22], [18, 18], [22, 17]], true, true)

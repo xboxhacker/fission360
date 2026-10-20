@@ -20,8 +20,10 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QSet>
+#include <QSysInfo>
 #include <QThread>
 #include <QUrl>
+#include <QUrlQuery>
 #include <algorithm>
 #include <cmath>
 #include <QDir>
@@ -592,6 +594,46 @@ void FissionApplication::skipUpdateVersion(const QString &version) {
 void FissionApplication::openUpdateUrl(const QString &url) {
     if (url.isEmpty()) return;
     QDesktopServices::openUrl(QUrl(url));
+}
+
+void FissionApplication::reportBug() {
+    QStringList featureErrs;
+    if (m_document) {
+        for (auto *f : m_document->timeline()->features()) {
+            if (f && !f->isHealthy())
+                featureErrs << QStringLiteral("%1: %2").arg(f->name(), f->error());
+        }
+    }
+    const QString body = QStringLiteral(
+                             "### What happened\n\n"
+                             "<!-- Short description of the bug -->\n\n"
+                             "### Steps to reproduce\n\n"
+                             "1.\n2.\n3.\n\n"
+                             "### Expected\n\n\n"
+                             "### Actual\n\n\n"
+                             "### Environment\n"
+                             "- Fission 360: %1\n"
+                             "- OS: %2 (%3)\n"
+                             "- Qt: %4\n"
+                             "- Last status: %5\n"
+                             "- Unhealthy features: %6\n")
+                             .arg(QStringLiteral(FISSION_VERSION),
+                                  QSysInfo::prettyProductName(),
+                                  QSysInfo::currentCpuArchitecture(),
+                                  QString::fromLatin1(qVersion()),
+                                  m_status.isEmpty() ? QStringLiteral("(none)") : m_status,
+                                  featureErrs.isEmpty() ? QStringLiteral("(none)") : featureErrs.join(QStringLiteral("; ")));
+
+    QUrl url(QStringLiteral("https://github.com/xboxhacker/fission360/issues/new"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("title"), QStringLiteral("Bug: "));
+    q.addQueryItem(QStringLiteral("body"), body);
+    q.addQueryItem(QStringLiteral("labels"), QStringLiteral("bug"));
+    url.setQuery(q);
+    if (!QDesktopServices::openUrl(url))
+        showMessage(QStringLiteral("Could not open the browser — report at github.com/xboxhacker/fission360/issues"));
+    else
+        showMessage(QStringLiteral("Opened a new GitHub issue form"));
 }
 
 void FissionApplication::checkForUpdates(bool force) {

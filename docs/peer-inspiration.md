@@ -71,7 +71,7 @@ Prioritised for Fission’s existing C++/Qt/OCCT stack.
 - [x] `Fission360 --mcp` MVP (list_commands, execute, batch, measure, export, open/save, …) — see `docs/mcp.md` *(1.13.29; screenshot / --connect later)*  
 - [ ] Oracle suite: 10 public STEP parts, volume/CoM vs FreeCAD or analytic  
 - [ ] Windows MSI + `winget` manifest  
-- [ ] Help → Report Issue (pre-filled body: version, OS, last error)  
+- [x] Help → Report Issue (pre-filled body: version, OS, last error) — top bar + File / Help / UTILITIES *(1.13.32)*  
 - [ ] README “honest status” line + link to this file  
 
 Reviewed against SolidCraft public README / capabilities / architecture / MCP docs (2026-10). Re-check their CONTRIBUTING/AGENTS before any contribution *to* SolidCraft (separate project).

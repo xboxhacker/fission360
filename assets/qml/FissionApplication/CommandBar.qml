@@ -65,6 +65,7 @@ Rectangle {
                 MenuItem { text: "Exit"; onTriggered: Qt.quit() }
                 MenuSeparator {}
                 MenuItem { text: "About Fission 360..."; onTriggered: bar.app.openAbout() }
+                MenuItem { text: "Report Bug..."; onTriggered: fissionApp.reportBug() }
             }
         }
         ToolbarButton {
@@ -178,6 +179,13 @@ Rectangle {
 
         Item { Layout.preferredWidth: 10 }
 
+        ToolbarButton {
+            compact: true
+            glyph: "bug"
+            glyphColor: Theme.headerText
+            tip: "Report a bug on GitHub (opens a pre-filled issue)"
+            onClicked: fissionApp.reportBug()
+        }
         Text {
             text: "Fission 360  v" + fissionApp.version
             color: "#aab2bb"

@@ -312,6 +312,30 @@ void testFilletChamferShell() {
         if (near(GeomUtils::faceCentroid(TopoDS::Face(faces(i))).Z(), 10)) top = i - 1;
     doc.addFeature("Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, box, top)}}, {"thickness", "1 mm"}});
     checkVolume(&doc, 8000 - 38 * 18 * 9, "shell: open top, 1 mm walls");
+
+    // Hip roof with a 2 mm ridge strip that vanishes under a 2 mm inward offset
+    FissionDocument roofDoc;
+    extrude(&roofDoc, rectSketch(&roofDoc, "XY", 0, 0, 40, 20), 10);
+    QVariantList topEdges;
+    {
+        const TopoDS_Shape b = roofDoc.body(0)->shape();
+        const auto es = GeomUtils::edgeMap(b);
+        for (int i = 1; i <= es.Extent(); ++i)
+            if (near(GeomUtils::edgeMidpoint(TopoDS::Edge(es(i))).Z(), 10)) topEdges << GeomUtils::edgeRef(0, b, i - 1);
+    }
+    roofDoc.addFeature("Chamfer", {{"edges", topEdges}, {"distance", "9 mm"}});
+    const TopoDS_Shape roof = roofDoc.body(0)->shape();
+    const double roofVolume = totalVolume(&roofDoc);
+    const auto roofFaces = GeomUtils::faceMap(roof);
+    int slope = -1;
+    for (int i = 1; i <= roofFaces.Extent(); ++i) {
+        const gp_Pnt c = GeomUtils::faceCentroid(TopoDS::Face(roofFaces(i)));
+        if (near(c.X(), 20) && c.Y() < 10 && c.Z() > 1 && c.Z() < 9.9) slope = i - 1;
+    }
+    auto *roofShell = roofDoc.addFeature(
+        "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, roof, slope)}}, {"thickness", "2 mm"}});
+    check(slope >= 0 && roofShell->isHealthy() && totalVolume(&roofDoc) > 0 && totalVolume(&roofDoc) < roofVolume,
+          "shell: sloped hip-roof face, 2 mm walls across a 2 mm ridge", status(&roofDoc));
 }
 
 void testRevolveLoftSweep() {
@@ -2767,6 +2791,129 @@ void testPhase2And3() {
     }
 }
 
+// Regression recipes inspired by public SolidCraft GitHub issues (tangency-labs/solidcraft).
+// Ideas / failure modes only — no SolidCraft source. See docs/solidcraft-issue-parity.md.
+void testSolidCraftParity() {
+    // SC #3541 — loft between two circles should be a smooth frustum, not a pinched mid-waist
+    {
+        FissionDocument doc;
+        auto *a = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        a->addCircle(0, 0, 20);
+        auto *plane = doc.addFeature("ConstructionPlane", {{"mode", "offset"}, {"base", "XY"}, {"offset", "30 mm"}});
+        auto *b = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "feature:" + plane->id()}}));
+        b->addCircle(0, 0, 10);
+        doc.rebuild();
+        auto *loft = doc.addFeature("Loft", {{"sections", QVariantList{QVariantMap{{"sketch", a->id()}},
+                                                                       QVariantMap{{"sketch", b->id()}}}},
+                                             {"ruled", true}});
+        const double expected = 30.0 / 3.0 * M_PI * (400 + 100 + 200);
+        check(loft->isHealthy() && near(totalVolume(&doc), expected, 2e-3),
+              "sc-parity #3541: circle loft frustum volume", status(&doc));
+        double x0, y0, z0, x1, y1, z1;
+        GeomUtils::boundingBox(doc.body(0)->shape()).Get(x0, y0, z0, x1, y1, z1);
+        check(near(z1, 30, 1e-3) && near(x1 - x0, 40, 5e-2) && near(y1 - y0, 40, 5e-2),
+              "sc-parity #3541: loft spans full base diameter (no mid pinch)",
+              QString("dx=%1 dy=%2 z=%3").arg(x1 - x0).arg(y1 - y0).arg(z1));
+    }
+
+    // SC #3578 — overlapping Combine join must produce a single solid with fused volume
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        box(&doc, 5, 0, 10, 10, 10);
+        auto *c = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "join"}});
+        check(c->isHealthy() && doc.bodyCount() == 1 && near(totalVolume(&doc), 1500),
+              "sc-parity #3578: combine join of overlapping boxes", status(&doc));
+    }
+
+    // SC #3526 — intersect on a multi-lump body must not silently wipe everything
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        box(&doc, 40, 0, 10, 10, 10);
+        auto *join = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "join"}});
+        check(join->isHealthy() && doc.bodyCount() == 1 && GeomUtils::solids(doc.body(0)->shape()).size() >= 2
+                  && near(totalVolume(&doc), 2000),
+              "sc-parity #3526: join of distant boxes keeps both lumps", status(&doc));
+        box(&doc, 0, 0, 10, 10, 10);   // tool overlaps only the first lump
+        auto *ix = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "intersect"}});
+        check(ix->isHealthy() && totalVolume(&doc) > 500 && totalVolume(&doc) < 1500,
+              "sc-parity #3526: intersect on multi-lump keeps the overlapping lump", status(&doc));
+    }
+
+    // SC #3528 — cut near a revolve seam must not delete most of the body
+    {
+        FissionDocument doc;
+        auto *s = rectSketch(&doc, "XZ", 10, 0, 10, 20);
+        auto *rev = doc.addFeature("Revolve", {{"sketch", s->id()}, {"axis", "Z"}});
+        const double revVol = totalVolume(&doc);
+        check(rev->isHealthy() && near(revVol, M_PI * (400 - 100) * 20, 2e-3),
+              "sc-parity #3528: revolve tube volume", status(&doc));
+        // Sphere centred on the usual OCCT revolve seam (+X) — cut must remove a pocket, not the tube
+        box(&doc, 12, -4, 8, 8, 8);
+        doc.addFeature("Move", {{"bodies", QVariantList{1}}, {"translate", QVariantList{"0 mm", "0 mm", "6 mm"}}});
+        auto *cut = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "cut"}});
+        const double after = totalVolume(&doc);
+        check(cut->isHealthy() && after > revVol * 0.7 && after < revVol - 1,
+              "sc-parity #3528: cut across revolve seam keeps most of the volume",
+              QString("before=%1 after=%2 %3").arg(revVol).arg(after).arg(status(&doc)));
+    }
+
+    // SC #3573 — tapered + filleted box then Shell must stay a valid solid
+    {
+        FissionDocument doc;
+        auto *ex = extrude(&doc, rectSketch(&doc, "XY", 0, 0, 40, 40), "40 mm");
+        ex->set("taper", "5 deg");
+        doc.rebuild();
+        check(ex->isHealthy() && totalVolume(&doc) > 0, "sc-parity #3573: tapered box", status(&doc));
+        auto *fil = doc.addFeature("Fillet", {{"allEdges", true}, {"body", 0}, {"radius", "2 mm"}});
+        const double beforeShell = totalVolume(&doc);
+        check(fil->isHealthy() && beforeShell > 0, "sc-parity #3573: fillet after taper", status(&doc));
+        const auto top = [](const gp_Pnt &p) { return p.Z() > 35; };
+        const int topFace = findFace(&doc, 0, top);
+        auto *sh = doc.addFeature("Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, doc.body(0)->shape(), topFace)}},
+                                            {"thickness", "2 mm"}});
+        const bool valid = !doc.body(0)->shape().IsNull() && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid();
+        check(topFace >= 0 && sh->isHealthy() && valid && totalVolume(&doc) > 0 && totalVolume(&doc) < beforeShell,
+              "sc-parity #3573: shell after taper+fillet is valid and hollow", status(&doc));
+    }
+
+    // SC #3561 / #3587 — oversized blend must fail with an error, not hang or silently corrupt
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10, "join");
+        auto *fil = doc.addFeature("Fillet", {{"allEdges", true}, {"body", 0}, {"radius", "8 mm"}});
+        check(!fil->isHealthy() || (fil->isHealthy() && totalVolume(&doc) > 0 && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid()),
+              "sc-parity #3561: oversized fillet fails cleanly or yields a valid solid", status(&doc));
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10, "join");
+        const auto ridge = [](const gp_Pnt &p) { return near(p.X(), 5) && near(p.Y(), 0, 1e-6) && near(p.Z(), 10); };
+        auto *ch = doc.addFeature("Chamfer", {{"edges", QVariantList{edgeAt(&doc, 0, ridge)}}, {"distance", "8 mm"}});
+        check(!ch->isHealthy() || (ch->isHealthy() && totalVolume(&doc) > 0 && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid()),
+              "sc-parity #3587: chamfer taller than the walls fails cleanly or stays valid", status(&doc));
+    }
+
+    // SC #3563 — Extrude Join / Through All against an existing body
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 40, 20, 10, "join");
+        auto *pad = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        pad->addRectangle(5, 5, 10, 10);
+        doc.rebuild();
+        auto *join = extrude(&doc, pad, "15 mm", "join");
+        check(join->isHealthy() && near(totalVolume(&doc), 40 * 20 * 10 + 10 * 10 * 15, 2e-3),
+              "sc-parity #3563: extrude join onto an existing body", status(&doc));
+        auto *hole = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        hole->addCircle(30, 10, 3);
+        doc.rebuild();
+        auto *thru = extrude(&doc, hole, "1 mm", "cut", {{"extent", "throughAll"}});
+        check(thru->isHealthy() && near(totalVolume(&doc), 40 * 20 * 10 + 10 * 10 * 15 - M_PI * 9 * 10, 2e-3),
+              "sc-parity #3563: extrude through-all cut", status(&doc));
+    }
+}
+
 }   // namespace
 
 namespace SelfTest {
@@ -2815,6 +2962,7 @@ int run() {
     testDocumentVersionsAndAutosave();
     testGifWriter();
     testViewportBackground();
+    testSolidCraftParity();
     std::printf("\n%d passed, %d failed\n", g_passes, g_failures);
     std::fflush(stdout);
     return g_failures;
