@@ -16,6 +16,9 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 The version number now goes up with every round of changes (`FISSION_VERSION` in `CMakeLists.txt`; it is
 shown in the title bar and available to scripts as `fission.version`).
 
+### 1.13.34 — Shell clean corners
+- **Shell**: for planar bodies prefer Intersection joins (not Arc) so inner corners stay sharp; reject results with `BRepCheck` failures or tiny spike faces (< 0.01 mm²). Punch fallback grows the opening face in-plane before cutting and sews the result. Fixes the jagged “teeth” at shelled frustum corners.
+
 ### 1.13.33 — Shell frustum punch fallback + versions inside .f360
 - **Shell**: unify coplanar faces first; more complete-intersection retries; accept volume-correct results after `ShapeFix` even when `BRepCheck` complains; fallback hollows by solid-offset cut then punches opening faces through the wall (fixes 45° face-extrude frustum shells that still failed after 1.13.31).
 - Selftest: user recipe — box + 45° face extrude + shell sloped face 2 mm inside.

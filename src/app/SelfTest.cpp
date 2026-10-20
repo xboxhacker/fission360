@@ -370,8 +370,18 @@ void testFilletChamferShell() {
         }
         auto *sh = doc.addFeature(
             "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, shape, slopeFace)}}, {"thickness", "2 mm"}});
-        check(slopeFace >= 0 && sh->isHealthy() && totalVolume(&doc) > 0,
-              "shell: 45° frustum slope face, 2 mm inside (user recipe)", status(&doc));
+        int tiny = 0;
+        if (sh->isHealthy() && doc.bodyCount() > 0) {
+            for (TopExp_Explorer e(doc.body(0)->shape(), TopAbs_FACE); e.More(); e.Next()) {
+                GProp_GProps props;
+                BRepGProp::SurfaceProperties(TopoDS::Face(e.Current()), props);
+                if (props.Mass() < 1e-2) ++tiny;
+            }
+        }
+        check(slopeFace >= 0 && sh->isHealthy() && totalVolume(&doc) > 0
+                  && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid() && tiny == 0,
+              "shell: 45° frustum slope face, 2 mm inside (clean corners)",
+              QString("tinyFaces=%1 %2").arg(tiny).arg(status(&doc)));
     }
 }
 
