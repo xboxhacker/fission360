@@ -15,7 +15,7 @@
 #include <ShapeFix_Shape.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_ListIteratorOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Solid.hxx>
 
@@ -124,7 +124,7 @@ TopoDS_Shape punchOpenings(const TopoDS_Shape &solid, const TopTools_ListOfShape
         return {};
     }
     const double depth = std::fabs(offset) * 2.0 + 1.0;   // clear the wall into the cavity
-    for (TopTools_ListIteratorOfShape it(openings); it.More(); it.Next()) {
+    for (TopTools_ListOfShape::Iterator it(openings); it.More(); it.Next()) {
         const TopoDS_Face f = TopoDS::Face(it.Value());
         try {
             const gp_Dir n = outwardNormal(f);

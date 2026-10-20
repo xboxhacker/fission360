@@ -344,26 +344,33 @@ void testFilletChamferShell() {
         sk->addRectangle(-50.7872, -46.7061, 101.5744, 93.4122);
         doc.rebuild();
         extrude(&doc, sk, "40 mm");
-        const auto top = [](const gp_Pnt &p) { return near(p.Z(), 40, 1e-3); };
+        int topFace = -1;
+        {
+            const TopoDS_Shape box = doc.body(0)->shape();
+            const auto fs = GeomUtils::faceMap(box);
+            for (int i = 1; i <= fs.Extent(); ++i)
+                if (near(GeomUtils::faceCentroid(TopoDS::Face(fs(i))).Z(), 40, 1e-3)) topFace = i - 1;
+        }
         auto *frustum = doc.addFeature(
-            "Extrude", {{"profiles", QVariantList{faceAt(&doc, 0, top)}},
+            "Extrude", {{"profiles", QVariantList{GeomUtils::faceRef(0, doc.body(0)->shape(), topFace)}},
                         {"distance", "40 mm"},
                         {"taper", "45 deg"},
                         {"operation", "join"}});
-        check(frustum->isHealthy() && totalVolume(&doc) > 0, "shell: frustum face-extrude", status(&doc));
+        check(topFace >= 0 && frustum->isHealthy() && totalVolume(&doc) > 0, "shell: frustum face-extrude",
+              status(&doc));
         const TopoDS_Shape shape = doc.body(0)->shape();
         const auto faces = GeomUtils::faceMap(shape);
-        int slope = -1;
+        int slopeFace = -1;
         for (int i = 1; i <= faces.Extent(); ++i) {
             const gp_Pnt c = GeomUtils::faceCentroid(TopoDS::Face(faces(i)));
             if (c.Z() > 45 && c.Z() < 75 && std::fabs(c.Y()) > 15) {
-                slope = i - 1;
+                slopeFace = i - 1;
                 break;
             }
         }
         auto *sh = doc.addFeature(
-            "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, shape, slope)}}, {"thickness", "2 mm"}});
-        check(slope >= 0 && sh->isHealthy() && totalVolume(&doc) > 0,
+            "Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, shape, slopeFace)}}, {"thickness", "2 mm"}});
+        check(slopeFace >= 0 && sh->isHealthy() && totalVolume(&doc) > 0,
               "shell: 45° frustum slope face, 2 mm inside (user recipe)", status(&doc));
     }
 }
