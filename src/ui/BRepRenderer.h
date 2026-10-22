@@ -3,6 +3,7 @@
 #pragma once
 #include <QQuickFramebufferObject>
 #include <QColor>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
 #include <QVector3D>
@@ -204,6 +205,8 @@ private:
     mutable QHash<const void *, ShapeMaps> m_mapCache;
 
     void tessellate();
+    // Lets the status bar move and the window paint while a large model is meshed.
+    void pumpDisplay(const QString &label, double fraction);
     void assemble();        // everything, with the selection highlighted
     void assembleHover();   // just the hovered item
     // Integer identity of a pick tag (0 = never matches) and the tag / whole body a selection ref names
@@ -262,4 +265,8 @@ private:
     std::shared_ptr<const HoverData> m_hoverData;
     quint64 m_hoverVersion = 0;
     QTimer m_tessellateTimer;
+    QElapsedTimer m_uiPump;
+    bool m_inTessellate = false;
+    bool m_tessellateAgain = false;
+    bool m_streamDisplay = false;
 };

@@ -114,6 +114,32 @@ ApplicationWindow {
     readonly property var activeDrawing: activeDrawingId.length
         ? fissionApp.drawingManager.drawingById(activeDrawingId) : null
     readonly property bool inDrawing: !!activeDrawing
+    // Ctrl+Y in C++ follows this. Null means the solid's own undo stack.
+    Binding {
+        target: fissionApp
+        property: "drawingEditTarget"
+        value: win.inDrawing ? win.activeDrawing : null
+    }
+
+    function editUndo() {
+        if (viewportItem) viewportItem.cancelSketchInput()
+        if (inDrawing && activeDrawing) {
+            if (!activeDrawing.canUndo) { fissionApp.showMessage("Nothing to undo"); return }
+            activeDrawing.undo()
+            return
+        }
+        if (doc) doc.undo()
+    }
+    function editRedo() {
+        if (viewportItem) viewportItem.cancelSketchInput()
+        if (inDrawing && activeDrawing) {
+            if (!activeDrawing.canRedo) { fissionApp.showMessage("Nothing to redo"); return }
+            activeDrawing.redo()
+            return
+        }
+        if (doc && doc.canRedo) doc.redo()
+        else fissionApp.showMessage("Nothing to redo")
+    }
 
     function createDrawingFromDesign() {
         if (!doc) return
@@ -136,6 +162,32 @@ ApplicationWindow {
         workspace = "design"
         toolbar.tab = "DRAWING"
         fissionApp.showMessage("Drawing created from " + doc.name + " (linked)")
+    }
+    function showSavedDrawing() {
+        if (!doc || !fissionApp.drawingManager) return
+        const assets = doc.linkedAssets || []
+        for (let i = 0; i < assets.length; ++i) {
+            const a = assets[i]
+            if (!a || a.kind !== "drawing") continue
+            const drawing = fissionApp.drawingManager.drawingById(a.id)
+            if (!drawing) continue
+            activeDrawingId = drawing.id
+            workspace = "design"
+            if (toolbar) toolbar.tab = "DRAWING"
+            return
+        }
+    }
+    function openDrawing(id) {
+        if (!doc || !fissionApp.drawingManager) return
+        const drawing = fissionApp.drawingManager.drawingById(id)
+        if (!drawing) {
+            fissionApp.showMessage("This drawing was not saved with the design")
+            return
+        }
+        leaveDesign()
+        activeDrawingId = drawing.id
+        workspace = "design"
+        toolbar.tab = "DRAWING"
     }
     function updateActiveDrawingFromDesign() {
         if (!doc || !activeDrawing) return
@@ -284,6 +336,12 @@ ApplicationWindow {
     SelectionManager { id: selectionManager }
 
     Connections {
+        target: fissionApp
+        function onDocumentOpened(opened) {
+            if (opened && opened === win.doc) win.showSavedDrawing()
+        }
+    }
+    Connections {
         target: win.doc
         function onRebuilt() { win.rev++ }
         function onContentRevisionChanged() {
@@ -308,6 +366,13 @@ ApplicationWindow {
             camera.target = view.target; camera.orthographic = view.ortho
         } else {
             Qt.callLater(() => viewportItem.renderer.fitAll(false))
+        }
+        if (activeDrawingId.length) {
+            const drawing = fissionApp.drawingManager ? fissionApp.drawingManager.drawingById(activeDrawingId) : null
+            if (!drawing || !doc || drawing.referencedDesignId !== doc.documentId) {
+                activeDrawingId = ""
+                if (toolbar && toolbar.tab === "DRAWING") toolbar.tab = "SOLID"
+            }
         }
     }
 
@@ -445,6 +510,10 @@ ApplicationWindow {
             } else if (selectedOf("face").length) {
                 p.sketch = ""
                 p.profiles = selectedOf("face")
+                // A round chamfer is pulled, not extruded. Start at zero so the face stays put
+                // until the arrow moves.
+                if (doc && selectedOf("face").some(f => !doc.isPlanarFace(f)))
+                    p.distance = "0 mm"
             } else {
                 p.sketch = type === "Sweep" ? lastSketchId(lastSketchId("")) : unusedSketchId()
             }
@@ -1100,6 +1169,7 @@ ApplicationWindow {
                 viewportItem.renderer.showGrid = g !== false && g !== "false"
             }
             fissionScripts.startAddIns(win)
+            win.showSavedDrawing()
             // Recover Autosave is File-menu only (no startup prompt)
             // Version check against GitHub latest (skip scripted UI tests)
             if (!(uiTest && uiTest.enabled))
@@ -1448,11 +1518,11 @@ ApplicationWindow {
         beginSketchPlanePick()
     }
 
-    // Q (Press Pull): a picked edge is filleted, a picked body face is offset (its neighbours follow),
-    // otherwise the profile (or latest sketch) is extruded
+    // Q (Press Pull): a picked edge is filleted, a picked face is offset (a round chamfer changes
+    // size), otherwise the profile (or latest sketch) is extruded.
     function pressPull() {
-        if (selectedOf("edge").length) startCommand("Fillet")
-        else if (selectedOf("face").length) startCommand("OffsetFace")
+        if (selectedOf("edge").length && !selectedOf("face").length) startCommand("Fillet")
+        else if (selectedOf("face").length) startCommand("OffsetFace", { distance: "0 mm" })
         else startCommand("Extrude")
     }
 
@@ -1671,8 +1741,8 @@ ApplicationWindow {
             cmd("Manufacture Panel", "", "Manufacture", "any", () => openManufacture()),
             cmd("Export", "", "File", "any", () => exportFile()),
             cmd("Export Viewport PNG", "", "File", "any", () => exportViewportPng()),
-            cmd("Undo", "Ctrl+Z", "Edit", "any", () => doc.undo()),
-            cmd("Redo", "Ctrl+Y", "Edit", "any", () => doc.redo()),
+            cmd("Undo", "Ctrl+Z", "Edit", "any", () => editUndo()),
+            cmd("Redo", "Ctrl+Y", "Edit", "any", () => editRedo()),
             cmd("Show/Hide Browser", "Ctrl+Alt+B", "Window", "any", () => { showBrowser = !showBrowser }),
             cmd("Show/Hide ViewCube", "Ctrl+Alt+V", "Window", "any", () => { showViewCube = !showViewCube }),
             cmd("Show/Hide Navigation Bar", "Ctrl+Alt+N", "Window", "any", () => { showNavBar = !showNavBar }),
@@ -1727,20 +1797,13 @@ ApplicationWindow {
     Shortcut {
         sequences: [StandardKey.Undo]
         context: Qt.ApplicationShortcut
-        onActivated: { viewportItem.cancelSketchInput(); win.doc.undo() }
+        onActivated: win.editUndo()
     }
     // Ctrl+Shift+Z redo (Ctrl+Y is also handled in C++ FissionApplication::eventFilter — more reliable)
     Shortcut {
         sequence: "Ctrl+Shift+Z"
         context: Qt.ApplicationShortcut
-        onActivated: {
-            viewportItem.cancelSketchInput()
-            if (!win.doc || !win.doc.canRedo) {
-                fissionApp.showMessage("Nothing to redo")
-                return
-            }
-            win.doc.redo()
-        }
+        onActivated: win.editRedo()
     }
     Shortcut { sequences: [StandardKey.Save]; onActivated: win.saveOrSaveAs() }
     Shortcut { sequence: "Ctrl+Shift+S"; onActivated: win.saveAs() }
@@ -1997,12 +2060,17 @@ ApplicationWindow {
                     }
                 }
 
-                DrawingWorkspace {
-                    id: drawingWorkspace
-                    app: win
+                // Built only while a drawing is open, so the modeling view does not carry this tree.
+                Loader {
+                    id: drawingLoader
                     anchors.fill: parent
-                    visible: win.inDrawing
-                    drawingDoc: win.activeDrawing
+                    active: win.inDrawing
+                    visible: active
+                    enabled: active
+                    sourceComponent: DrawingWorkspace {
+                        app: win
+                        drawingDoc: win.activeDrawing
+                    }
                 }
             }
         }
@@ -2011,7 +2079,7 @@ ApplicationWindow {
         StatusBar { id: statusBarItem; app: win; Layout.fillWidth: true }
     }
     property alias statusBar: statusBarItem
-    property alias drawingWorkspace: drawingWorkspace
+    readonly property var drawingWorkspace: drawingLoader.item
 
     ParametersDialog { id: parametersDialog; app: win }
     DocumentSettingsDialog { id: documentSettings; app: win }

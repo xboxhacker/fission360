@@ -10,8 +10,10 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -29,10 +31,16 @@
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <QElapsedTimer>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <gp_GTrsf.hxx>
@@ -105,6 +113,7 @@ void replaceBody(RebuildContext &ctx, int index, const TopoDS_Shape &shape, cons
     const QList<TopoDS_Shape> parts = GeomUtils::solids(shape);
     if (parts.isEmpty()) { ctx.bodies.removeAt(index); return; }
     ctx.bodies[index].shape = parts.first();
+    ctx.bodies[index].editedBy = featureId;
     for (int k = 1; k < parts.size(); ++k) ctx.bodies.insert(index + k, {ctx.nextBodyName(), parts[k], featureId});
 }
 
@@ -507,6 +516,373 @@ bool FissionSplitFace::compute(RebuildContext &ctx) {
     return true;
 }
 
+// Stops an OCCT algorithm that would otherwise freeze the window on a busy solid.
+class StepTimeLimit : public Message_ProgressIndicator {
+public:
+    explicit StepTimeLimit(qint64 ms) : m_ms(ms) { m_timer.start(); }
+    Standard_Boolean UserBreak() override { return m_timer.elapsed() > m_ms; }
+    void Show(const Message_ProgressScope &, const Standard_Boolean) override {}
+    bool expired() const { return m_timer.elapsed() > m_ms; }
+
+private:
+    QElapsedTimer m_timer;
+    qint64 m_ms;
+};
+
+// Analytic distance only. A generic point-to-surface projection can spin forever on a cone.
+double distanceToSurface(const TopoDS_Face &face, const gp_Pnt &world) {
+    BRepAdaptor_Surface s(face);
+    switch (s.GetType()) {
+    case GeomAbs_Plane:
+        return s.Plane().Distance(world);
+    case GeomAbs_Cylinder: {
+        const gp_Cylinder c = s.Cylinder();
+        const gp_Vec fromAxis(c.Location(), world);
+        const gp_Vec axis(c.Axis().Direction());
+        const gp_Vec radial = fromAxis - axis * fromAxis.Dot(axis);
+        return std::abs(radial.Magnitude() - c.Radius());
+    }
+    default:
+        return 1e100;
+    }
+}
+
+double distanceToFaces(const QList<TopoDS_Face> &faces, const gp_Pnt &world) {
+    double best = 1e100;
+    for (const TopoDS_Face &f : faces) best = std::min(best, distanceToSurface(f, world));
+    return best;
+}
+
+// Seam-split halves of one wall share a surface. A plane and a cylinder do not.
+bool sameSurface(const TopoDS_Face &a, const TopoDS_Face &b) {
+    const BRepAdaptor_Surface sa(a), sb(b);
+    if (sa.GetType() != sb.GetType()) return false;
+    if (sa.GetType() == GeomAbs_Plane) {
+        if (!sa.Plane().Axis().Direction().IsParallel(sb.Plane().Axis().Direction(), 1e-4)) return false;
+        return std::abs(sa.Plane().Distance(sb.Plane().Location())) < 1e-4;
+    }
+    if (sa.GetType() == GeomAbs_Cylinder) {
+        const gp_Cylinder ca = sa.Cylinder(), cb = sb.Cylinder();
+        if (std::abs(ca.Radius() - cb.Radius()) > 1e-4) return false;
+        if (!ca.Axis().Direction().IsParallel(cb.Axis().Direction(), 1e-4)) return false;
+        const gp_Vec gap(ca.Location(), cb.Location());
+        const gp_Vec axis(ca.Axis().Direction());
+        return (gap - axis * gap.Dot(axis)).Magnitude() < 1e-3;
+    }
+    TopLoc_Location la, lb;
+    const Handle(Geom_Surface) ua = BRep_Tool::Surface(a, la);
+    const Handle(Geom_Surface) ub = BRep_Tool::Surface(b, lb);
+    return !ua.IsNull() && ua == ub && la.IsEqual(lb);
+}
+
+double polarAngle(const gp_Ax3 &ax, const gp_Pnt &p) {
+    const gp_Vec d(ax.Location(), p);
+    const gp_Vec radial = d - gp_Vec(ax.Direction()) * d.Dot(gp_Vec(ax.Direction()));
+    return std::atan2(radial.Dot(gp_Vec(ax.YDirection())), radial.Dot(gp_Vec(ax.XDirection())));
+}
+
+// Normal at a point on the face. Face midpoints of a split wall point different ways.
+gp_Dir normalNear(const TopoDS_Face &face, const gp_Pnt &world) {
+    const BRepAdaptor_Surface s(face);
+    double u = 0, v = 0;
+    bool have = false;
+    if (s.GetType() == GeomAbs_Plane) {
+        const gp_Vec d(s.Plane().Location(), world);
+        u = d.Dot(gp_Vec(s.Plane().XAxis().Direction()));
+        v = d.Dot(gp_Vec(s.Plane().YAxis().Direction()));
+        have = true;
+    } else if (s.GetType() == GeomAbs_Cylinder) {
+        const gp_Vec d(s.Cylinder().Location(), world);
+        v = d.Dot(gp_Vec(s.Cylinder().Axis().Direction()));
+        u = polarAngle(s.Cylinder().Position(), world);
+        have = true;
+    } else if (s.GetType() == GeomAbs_Cone) {
+        const double sa = std::sin(s.Cone().SemiAngle());
+        if (std::abs(sa) > 1e-6) {
+            const gp_Vec d(s.Cone().Location(), world);
+            const gp_Vec axis(s.Cone().Axis().Direction());
+            const gp_Vec radial = d - axis * d.Dot(axis);
+            u = polarAngle(s.Cone().Position(), world);
+            v = (radial.Magnitude() - s.Cone().RefRadius()) / sa;
+            have = true;
+        }
+    }
+    if (!have) return outwardNormal(face);
+    gp_Pnt p;
+    gp_Vec du, dv;
+    s.D1(u, v, p, du, dv);
+    const gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-12) return outwardNormal(face);
+    gp_Dir dir(n);
+    if (face.Orientation() == TopAbs_REVERSED) dir.Reverse();
+    return dir;
+}
+
+TopoDS_Face faceOn(const QList<TopoDS_Face> &faces, const gp_Pnt &world) {
+    for (const TopoDS_Face &f : faces)
+        if (distanceToSurface(f, world) <= 1e-3) return f;
+    return faces.first();
+}
+
+// A round chamfer is a cone between two faces. Pulling it changes those two legs, and a pull
+// that reaches the corner takes the chamfer off.
+bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamfers, double distance,
+                      TopoDS_Shape &out, QString &error) {
+    struct Job {
+        QList<TopoDS_Face> faces;   // both halves when the cone is split on a seam
+        QList<TopoDS_Face> sideA;   // one wall, including seam-split halves
+        QList<TopoDS_Face> sideB;
+        double legA = 0;
+        double legB = 0;
+        gp_Pnt center;
+        gp_Pnt onA;
+        gp_Pnt onB;
+        TopoDS_Face coneOnA;
+        TopoDS_Face coneOnB;
+    };
+    QList<Job> jobs;
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaces;
+    TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+
+    auto adjacent = [&](const TopoDS_Face &face) {
+        QList<TopoDS_Face> out;
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopTools_ListOfShape *adj = edgeFaces.Seek(ex.Current());
+            if (!adj) continue;
+            for (TopTools_ListIteratorOfListOfShape it(*adj); it.More(); it.Next()) {
+                const TopoDS_Face other = TopoDS::Face(it.Value());
+                if (other.IsSame(face)) continue;
+                bool seen = false;
+                for (const TopoDS_Face &n : out)
+                    if (n.IsSame(other)) seen = true;
+                if (!seen) out.append(other);
+            }
+        }
+        return out;
+    };
+    auto listed = [](const QList<TopoDS_Face> &faces, const TopoDS_Face &face) {
+        for (const TopoDS_Face &n : faces)
+            if (n.IsSame(face)) return true;
+        return false;
+    };
+
+    QList<TopoDS_Face> claimed;
+    for (const TopoDS_Face &chamfer : chamfers) {
+        if (listed(claimed, chamfer)) continue;
+        if (BRepAdaptor_Surface(chamfer).GetType() != GeomAbs_Cone) {
+            error = QStringLiteral("Only a round chamfer can be pulled this way");
+            return false;
+        }
+        // A circular chamfer is often two cone faces meeting at a seam. Pull both.
+        QList<TopoDS_Face> group;
+        group.append(chamfer);
+        for (int i = 0; i < group.size() && group.size() < 8; ++i) {
+            for (const TopoDS_Face &other : adjacent(group[i])) {
+                if (BRepAdaptor_Surface(other).GetType() != GeomAbs_Cone || listed(group, other)) continue;
+                group.append(other);
+            }
+        }
+        struct SideGroup { QList<TopoDS_Face> faces; double length = 0; };
+        QList<SideGroup> groups;
+        for (const TopoDS_Face &part : group) {
+            claimed.append(part);
+            for (const TopoDS_Face &other : adjacent(part)) {
+                if (BRepAdaptor_Surface(other).GetType() == GeomAbs_Cone) continue;
+                int slot = -1;
+                for (int i = 0; i < groups.size(); ++i)
+                    if (sameSurface(groups[i].faces.first(), other)) slot = i;
+                if (slot < 0) {
+                    groups.append(SideGroup{});
+                    slot = groups.size() - 1;
+                }
+                if (!listed(groups[slot].faces, other)) groups[slot].faces.append(other);
+            }
+        }
+        // The two long boundaries are the walls the chamfer runs between. A flat that only
+        // ends the chamfer shares a short edge and is not a third wall.
+        for (const TopoDS_Face &part : group) {
+            for (TopExp_Explorer ex(part, TopAbs_EDGE); ex.More(); ex.Next()) {
+                const TopoDS_Edge edge = TopoDS::Edge(ex.Current());
+                if (BRep_Tool::Degenerated(edge)) continue;
+                const gp_Pnt mid = GeomUtils::edgeMidpoint(edge);
+                const double len = GCPnts_AbscissaPoint::Length(BRepAdaptor_Curve(edge));
+                int best = -1;
+                double bestD = 1e-3;
+                for (int i = 0; i < groups.size(); ++i) {
+                    const double d = distanceToFaces(groups[i].faces, mid);
+                    if (d < bestD) { bestD = d; best = i; }
+                }
+                if (best >= 0) groups[best].length += len;
+            }
+        }
+        std::sort(groups.begin(), groups.end(), [](const SideGroup &a, const SideGroup &b) { return a.length > b.length; });
+        if (groups.size() < 2 || groups[1].length < 0.2
+            || (groups.size() > 2 && groups[2].length > groups[1].length * 0.5)) {
+            error = QStringLiteral("This face is not a single chamfer");
+            return false;
+        }
+        Job job;
+        job.faces = group;
+        job.sideA = groups[0].faces;
+        job.sideB = groups[1].faces;
+        job.center = GeomUtils::faceCentroid(chamfer);
+        job.legA = job.legB = -1;
+        for (const TopoDS_Face &part : group) {
+            for (TopExp_Explorer ex(part, TopAbs_EDGE); ex.More(); ex.Next()) {
+                const gp_Pnt mid = GeomUtils::edgeMidpoint(TopoDS::Edge(ex.Current()));
+                const double da = distanceToFaces(job.sideA, mid);
+                const double db = distanceToFaces(job.sideB, mid);
+                // The edge lying on one neighbour is the far end of the leg along the other.
+                // Seam edges of a split cone sit on neither face, so they are not the leg.
+                if (db <= 1e-3 && da > 1e-3) { job.legA = da; job.onB = mid; job.coneOnB = part; }
+                if (da <= 1e-3 && db > 1e-3) { job.legB = db; job.onA = mid; job.coneOnA = part; }
+            }
+        }
+        if (job.legA < 0 || job.legB < 0) {
+            error = QStringLiteral("Could not measure this chamfer");
+            return false;
+        }
+        const auto shrink = [&](const QList<TopoDS_Face> &side, const TopoDS_Face &cone, const gp_Pnt &at, double leg) {
+            const double phi = normalNear(cone, at).Angle(normalNear(faceOn(side, at), at));
+            const double halfPi = 1.5707963267948966;
+            const double acute = phi > halfPi ? (2 * halfPi - phi) : phi;
+            const double s = std::sin(acute);
+            if (s < 0.05) return -1.0;
+            return leg - distance / s;
+        };
+        job.legA = shrink(job.sideA, job.coneOnA, job.onA, job.legA);
+        job.legB = shrink(job.sideB, job.coneOnB, job.onB, job.legB);
+        if (job.legA < -0.05 || job.legB < -0.05) {
+            // Past the corner: the chamfer comes off. A still-positive other leg is not a chamfer.
+            if (job.legA > 0.05 || job.legB > 0.05) {
+                error = QStringLiteral("Pull is larger than this chamfer");
+                return false;
+            }
+            job.legA = job.legB = 0;
+        }
+        jobs.append(job);
+    }
+    if (jobs.isEmpty()) { error = QStringLiteral("Select a chamfer face"); return false; }
+
+    BRepAlgoAPI_Defeaturing defeat;
+    defeat.SetShape(solid);
+    for (const Job &job : jobs)
+        for (const TopoDS_Face &face : job.faces) defeat.AddFaceToRemove(face);
+    defeat.SetToFillHistory(Standard_False);
+    Handle(StepTimeLimit) limit = new StepTimeLimit(2000);
+    defeat.Build(limit->Start());
+    if (limit->expired() || !defeat.IsDone() || defeat.Shape().IsNull()) {
+        error = QStringLiteral("Could not pull this chamfer");
+        return false;
+    }
+    TopoDS_Shape bare = defeat.Shape();
+    const bool anyLeft = std::any_of(jobs.begin(), jobs.end(), [](const Job &j) { return j.legA > 0.05 || j.legB > 0.05; });
+    if (!anyLeft) {
+        out = bare;
+        return !GeomUtils::solids(out).isEmpty();
+    }
+
+    BRepFilletAPI_MakeChamfer chamfer(bare);
+    int added = 0;
+    for (const Job &job : jobs) {
+        if (job.legA <= 0.05 && job.legB <= 0.05) continue;
+        TopoDS_Edge restored;
+        double best = 1e100;
+        for (TopExp_Explorer ex(bare, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const TopoDS_Edge edge = TopoDS::Edge(ex.Current());
+            if (BRep_Tool::Degenerated(edge)) continue;
+            const gp_Pnt mid = GeomUtils::edgeMidpoint(edge);
+            if (distanceToFaces(job.sideA, mid) > 0.05 || distanceToFaces(job.sideB, mid) > 0.05) continue;
+            const double rank = mid.Distance(job.center);
+            if (rank < best) { best = rank; restored = edge; }
+        }
+        if (restored.IsNull()) {
+            error = QStringLiteral("Could not pull this chamfer");
+            return false;
+        }
+        const double a = std::max(0.0, job.legA);
+        const double b = std::max(0.0, job.legB);
+        if (std::abs(a - b) <= 0.05 || std::min(a, b) <= 0.05)
+            chamfer.Add(std::max(a, b), restored);
+        else {
+            TopoDS_Face side;
+            for (TopExp_Explorer fx(bare, TopAbs_FACE); fx.More(); fx.Next()) {
+                const TopoDS_Face f = TopoDS::Face(fx.Current());
+                if (distanceToFaces(job.sideA, GeomUtils::faceCentroid(f)) < 0.05) { side = f; break; }
+            }
+            if (side.IsNull()) chamfer.Add(a, restored);
+            else chamfer.Add(a, b, restored, side);
+        }
+        ++added;
+    }
+    if (!added) { out = bare; return !GeomUtils::solids(out).isEmpty(); }
+    chamfer.Build();
+    if (!chamfer.IsDone()) { error = QStringLiteral("Pull is too large for this chamfer"); return false; }
+    out = chamfer.Shape();
+    return !GeomUtils::solids(out).isEmpty();
+}
+
+bool offsetFacesOnSolid(const TopoDS_Shape &solid, const QList<TopoDS_Face> &faces, double distance,
+                        TopoDS_Shape &out, QString &error) {
+    if (faces.isEmpty()) { error = QStringLiteral("Select one or more faces"); return false; }
+    if (std::fabs(distance) < 1e-9) { out = solid; return true; }
+    const double v0 = GeomUtils::volume(solid);
+
+    bool cones = !faces.isEmpty();
+    for (const TopoDS_Face &f : faces)
+        if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Cone) cones = false;
+
+    // A cone chamfer is pulled by rebuilding that face. Offsetting the whole solid here
+    // walks every face and will lock the window on a part like the spool hub.
+    if (!cones) {
+    try {
+        BRepOffset_MakeOffset mo;
+        mo.Initialize(solid, 0.0, 1e-5, BRepOffset_Skin, Standard_True, Standard_False, GeomAbs_Intersection);
+            for (const TopoDS_Face &f : faces) mo.SetOffsetOnFace(f, distance);
+            Handle(StepTimeLimit) limit = new StepTimeLimit(2000);
+            mo.MakeOffsetShape(limit->Start());
+            if (!limit->expired() && mo.IsDone() && !GeomUtils::solids(mo.Shape()).isEmpty()
+                && BRepCheck_Analyzer(mo.Shape()).IsValid()) {
+            const double v1 = GeomUtils::volume(mo.Shape());
+                if (distance > 0 ? v1 > v0 + 1e-6 : v1 < v0 - 1e-6) {
+                    out = mo.Shape();
+                    return true;
+                }
+        }
+    } catch (const Standard_Failure &) {
+        } catch (...) {
+        }
+    }
+
+    bool pulled = false;
+    try {
+        pulled = cones && pullChamferFaces(solid, faces, distance, out, error);
+    } catch (const Standard_Failure &) {
+        error = QStringLiteral("Could not pull this chamfer");
+    } catch (...) {
+        error = QStringLiteral("Could not pull this chamfer");
+    }
+    if (pulled && !GeomUtils::solids(out).isEmpty() && std::isfinite(GeomUtils::volume(out))
+        && (GeomUtils::faceMap(out).Extent() > 200 || BRepCheck_Analyzer(out).IsValid()))
+        return true;
+
+        TopoDS_Shape r = solid;
+        for (const TopoDS_Face &f : faces) {
+        if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane) {
+            if (error.isEmpty()) error = QStringLiteral("Could not pull this face");
+            return false;
+        }
+            const gp_Vec n(outwardNormal(f));
+        const TopoDS_Shape p = prism(f, n * distance);
+        if (p.IsNull()) { error = QStringLiteral("Offset Face failed"); return false; }
+        r = distance > 0 ? fuse(r, p) : cut(r, p);
+        if (r.IsNull()) { error = QStringLiteral("Offset Face failed"); return false; }
+    }
+    out = GeomUtils::unify(r);
+    error.clear();
+    return !out.IsNull();
+}
+
 bool FissionOffsetFace::compute(RebuildContext &ctx) {
     QString err;
     double d = 0;
@@ -516,37 +892,11 @@ bool FissionOffsetFace::compute(RebuildContext &ctx) {
     if (!readFaces(ctx, list("faces"), body, faces, err)) return fail(err);
     // Press Pull handle: on the first face, along its outward normal
     setManipulator(GeomUtils::faceCentroid(faces.first()), outwardNormal(faces.first()), "distance", d);
-    if (std::fabs(d) < 1e-9) return true;
-    const TopoDS_Shape solid = ctx.bodies[body].shape;
-    const double v0 = GeomUtils::volume(solid);
-
-    // Exact: offset only these faces and let the neighbours extend (works for curved faces too)
     TopoDS_Shape result;
-    try {
-        BRepOffset_MakeOffset mo;
-        mo.Initialize(solid, 0.0, 1e-5, BRepOffset_Skin, Standard_True, Standard_False, GeomAbs_Intersection);
-        for (const TopoDS_Face &f : faces) mo.SetOffsetOnFace(f, d);
-        mo.MakeOffsetShape();
-        if (mo.IsDone() && !GeomUtils::solids(mo.Shape()).isEmpty() && BRepCheck_Analyzer(mo.Shape()).IsValid()) {
-            const double v1 = GeomUtils::volume(mo.Shape());
-            if (d > 0 ? v1 > v0 + 1e-9 : v1 < v0 - 1e-9) result = mo.Shape();
-        }
-    } catch (const Standard_Failure &) {
-    }
-
-    // Fallback for flat faces: add or remove a prism under each face
-    if (result.IsNull()) {
-        TopoDS_Shape r = solid;
-        for (const TopoDS_Face &f : faces) {
-            if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane) return fail("Offset Face failed on a curved face");
-            const gp_Vec n(outwardNormal(f));
-            const TopoDS_Shape p = prism(f, n * d);
-            if (p.IsNull()) return fail("Offset Face failed");
-            r = d > 0 ? fuse(r, p) : cut(r, p);
-            if (r.IsNull()) return fail("Offset Face failed");
-        }
-        result = GeomUtils::unify(r);
-    }
+    QString pullErr;
+    if (!offsetFacesOnSolid(ctx.bodies[body].shape, faces, d, result, pullErr))
+        return fail(pullErr.isEmpty() ? QStringLiteral("Could not pull this face") : pullErr);
+    if (std::fabs(d) < 1e-9) return true;
     replaceBody(ctx, body, result, id());
     return true;
 }

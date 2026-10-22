@@ -9,6 +9,7 @@
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <QMap>
+#include <cmath>
 
 // Groups the referenced edges by body. With allEdges, every edge of `body` is used.
 static bool collectEdges(RebuildContext &ctx, bool allEdges, int body, const QVariantList &refs,
@@ -68,7 +69,16 @@ bool FissionFillet::compute(RebuildContext &ctx) {
         }
         fillet.Build();
         if (!fillet.IsDone()) return fail("Fillet failed (radius may be too large for the selected edges)");
-        ctx.bodies[it.key()].shape = fillet.Shape();
+        const TopoDS_Shape result = fillet.Shape();
+        const double before = GeomUtils::volume(ctx.bodies[it.key()].shape);
+        const double after = GeomUtils::volume(result);
+        // MakeFillet reports success for a radius the edges cannot hold, and the shape it returns can be
+        // a self-intersecting solid whose volume is orders of magnitude too large. A fillet only removes material.
+        if (result.IsNull() || GeomUtils::solids(result).isEmpty() || !std::isfinite(after) || !(after > 1e-9)
+            || after > before * 1.01)
+            return fail("Fillet failed (radius may be too large for the selected edges)");
+        ctx.bodies[it.key()].shape = result;
+        ctx.bodies[it.key()].editedBy = id();
     }
     return true;
 }
@@ -112,6 +122,7 @@ bool FissionChamfer::compute(RebuildContext &ctx) {
         chamfer.Build();
         if (!chamfer.IsDone()) return fail("Chamfer failed (distance may be too large)");
         ctx.bodies[it.key()].shape = chamfer.Shape();
+        ctx.bodies[it.key()].editedBy = id();
     }
     return true;
 }

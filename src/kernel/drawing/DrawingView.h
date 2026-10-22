@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QPointF>
+#include <QJsonObject>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QQmlEngine>
@@ -22,6 +23,7 @@ class DrawingView : public QObject {
     Q_PROPERTY(double width READ width NOTIFY geometryChanged)
     Q_PROPERTY(double height READ height NOTIFY geometryChanged)
     Q_PROPERTY(QString displayStyle READ displayStyle WRITE setDisplayStyle NOTIFY styleChanged)
+    Q_PROPERTY(QString renderPng READ renderPng NOTIFY renderChanged)   // base64 PNG when displayStyle is rendered
     Q_PROPERTY(bool showHiddenLines READ showHiddenLines WRITE setShowHiddenLines NOTIFY hiddenLinesChanged)
     Q_PROPERTY(QString tangentEdgeHandling READ tangentEdgeHandling WRITE setTangentEdgeHandling NOTIFY tangentChanged)
     Q_PROPERTY(QString orientation READ orientation WRITE setOrientation NOTIFY orientationChanged)
@@ -56,6 +58,8 @@ public:
 
     QString displayStyle() const { return m_displayStyle; }
     void setDisplayStyle(const QString &style);
+    QString renderPng() const { return m_renderPng; }
+    void setRenderPng(const QString &pngB64);
 
     bool showHiddenLines() const { return m_showHidden; }
     void setShowHiddenLines(bool show);
@@ -85,6 +89,9 @@ public:
     void setCurves(const QVariantList &visible, const QVariantList &hidden, const QVariantList &section,
                    double widthMm, double heightMm);
 
+    QJsonObject toJson() const;
+    static DrawingView *fromJson(const QJsonObject &obj, QObject *parent = nullptr);
+
 signals:
     void nameChanged();
     void positionChanged();
@@ -92,6 +99,7 @@ signals:
     void rotationChanged();
     void geometryChanged();
     void styleChanged();
+    void renderChanged();
     void hiddenLinesChanged();
     void tangentChanged();
     void orientationChanged();
@@ -108,7 +116,8 @@ private:
     double m_rotation = 0.0;
     double m_width = 80;
     double m_height = 60;
-    QString m_displayStyle = QStringLiteral("shadedWithEdges");
+    QString m_displayStyle = QStringLiteral("wireframe");
+    QString m_renderPng;
     bool m_showHidden = false;
     QString m_tangentMode = QStringLiteral("visible");
     QString m_orientation = QStringLiteral("front");

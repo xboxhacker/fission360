@@ -145,6 +145,7 @@ public:
     Q_INVOKABLE QVariantList tangentChain(const QVariantMap &edgeRef) const;
     // Edge refs of every edge bounding a face (Fillet / Chamfer on a picked face)
     Q_INVOKABLE QVariantList faceEdges(const QVariantMap &faceRef) const;
+    Q_INVOKABLE bool isPlanarFace(const QVariantMap &faceRef) const;
     // {ok, origin: [x, y, z], normal: [x, y, z]} of "XY" / "XZ" / "YZ", an originplane, plane or planar face ref
     Q_INVOKABLE QVariantMap planeFrame(const QVariant &ref) const;
 
@@ -197,6 +198,13 @@ public:
     void fromJson(const QJsonObject &obj);
     Q_INVOKABLE bool save(const QString &path);
     Q_INVOKABLE bool load(const QString &path);
+    // Drawing bodies for the live .f360. Version snapshots and autosave omit this array.
+    QJsonArray drawingPayload() const { return m_drawings; }
+    void setDrawingPayload(const QJsonArray &drawings);
+    bool drawingsLive() const { return m_drawingsLive; }
+    void setDrawingsLive(bool live) { m_drawingsLive = live; }
+    // Copy the drawings array out of an existing .f360 (autosave recovery). Missing key leaves the payload unchanged.
+    void copyDrawingPayloadFromFile(const QString &path);
     // Preview stored in the file on the next save (PNG); a loaded design keeps the one it was saved with
     Q_PROPERTY(bool hasThumbnail READ hasThumbnail NOTIFY thumbnailChanged)
     void setThumbnail(const QByteArray &png);
@@ -271,6 +279,7 @@ signals:
 private:
     static QVariantMap defaultManufacture();
     void bumpContentRevision();
+    void touchDrawingLink();
     QByteArray snapshotJsonForHistory() const;
     void attachFeature(FissionFeature *f);
     void attachParameter(FissionParameter *p);
@@ -278,6 +287,14 @@ private:
     void setModified(bool m);
     void restore(const QJsonObject &state);
     void clearContent();
+    // Hash of the timeline, parameters, and units. The file stores the rebuilt solids under this key.
+    QByteArray geometryKey() const;
+    QJsonObject resultCacheJson() const;
+    bool restoreResultCache(const QJsonObject &cache);
+    void adoptBodies(const QList<BodyState> &bodies);
+    void realizeLightweightFeatures();
+    // Replay only when the solids on screen are not the ones at the current marker.
+    void syncModelToMarker();
     QString uniqueFeatureName(const QString &type) const;
     // Fusion bulk-export STEP blob → temp file → importCAD (bodies with stepData)
     void importStepFallback(const QByteArray &stepData, const QString &name);
@@ -288,6 +305,8 @@ private:
     qint64 m_contentRevision = 1;
     int m_versionNumber = 0;
     QVariantList m_linkedAssets;   // see linkAsset()
+    QJsonArray m_drawings;         // live .f360 drawing bodies; omitted from version snapshots
+    bool m_drawingsLive = false;   // manager has the drawings for this design, so Save may replace m_drawings
     QByteArray m_thumbnail;
     bool m_modified = false;
     double m_density = 7.85;
@@ -307,7 +326,13 @@ private:
     struct RebuildStep { FissionFeature *feature; quint64 revision; bool suppressed; RebuildContext after; };
     QList<RebuildStep> m_steps;
     QString m_stepsKey;   // parameter values and units the steps were computed with
+    // Decoded model at a marker, so scrubbing back to a visited step does not replay it.
+    struct MarkerSolids { QString sig; QList<BodyState> bodies; };
+    QHash<int, MarkerSolids> m_atMarker;
+    QList<int> m_atMarkerOrder;
     bool m_restoring = false;
+    bool m_loading = false;
+    bool m_resultFromCache = false;   // solids are the saved marker state, so Save must not replay them
     int m_rebuildCount = 0;
     QVariantList m_analyses;
     QVariantMap m_manufacture;

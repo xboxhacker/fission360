@@ -3,6 +3,7 @@
 #pragma once
 #include <QObject>
 #include <QEvent>
+#include <QPointer>
 #include <atomic>
 #include <QString>
 #include <QTimer>
@@ -10,6 +11,7 @@
 #include <QQuickItem>
 #include <QNetworkAccessManager>
 #include "kernel/FissionDocument.h"
+#include "kernel/drawing/DrawingDocument.h"
 #include "kernel/drawing/DrawingManager.h"
 
 // Application singleton exposed to QML as `fissionApp`. Several designs can be open at once (one tab each);
@@ -29,6 +31,8 @@ class FissionApplication : public QObject {
     Q_PROPERTY(int taskCount READ taskCount NOTIFY progressChanged)
     // Phase 9: drawings from the active design (Fusion Drawing / From Design)
     Q_PROPERTY(DrawingManager *drawingManager READ drawingManager CONSTANT)
+    // While a drawing is on screen, Ctrl+Y steps that drawing instead of the solid.
+    Q_PROPERTY(QObject *drawingEditTarget READ drawingEditTarget WRITE setDrawingEditTarget NOTIFY drawingEditTargetChanged)
     // Crash recovery: interval in seconds (0 = off). Default 120. Persisted via QSettings.
     Q_PROPERTY(int autosaveIntervalSec READ autosaveIntervalSec WRITE setAutosaveIntervalSec NOTIFY autosaveIntervalChanged)
 
@@ -46,6 +50,8 @@ public:
     double progressValue() const;
     int taskCount() const { return m_tasks.size(); }
     DrawingManager *drawingManager() const { return m_drawingManager; }
+    QObject *drawingEditTarget() const { return m_drawingEdit; }
+    void setDrawingEditTarget(QObject *doc);
     // Tasks of scripts and QML (kernel operations report through FissionProgress). Any thread.
     Q_INVOKABLE void beginTask(const QString &id, const QString &label);
     Q_INVOKABLE void reportProgress(const QString &id, double fraction, const QString &label = QString());
@@ -105,6 +111,8 @@ public:
 
 signals:
     void activeDocumentChanged();
+    // Fired after a design is opened or an autosave is recovered, once drawing bodies are restored
+    void documentOpened(FissionDocument *document);
     void documentsChanged();
     void statusMessageChanged();
     void progressChanged();
@@ -116,6 +124,7 @@ signals:
     // GitHub release newer than this build: version (no v), html_url, name/body snippet
     void updateAvailable(const QString &version, const QString &url, const QString &summary);
     void updateCheckFinished(bool newerAvailable, const QString &latestVersion);
+    void drawingEditTargetChanged();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -136,6 +145,7 @@ private:
     FissionDocument *m_document = nullptr;
     QString m_status;
     DrawingManager *m_drawingManager = nullptr;
+    QPointer<DrawingDocument> m_drawingEdit;
     QTimer m_autosaveTimer;
     int m_autosaveSec = 120;
     QNetworkAccessManager m_updateNam;

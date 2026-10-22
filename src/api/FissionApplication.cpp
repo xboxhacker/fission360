@@ -72,6 +72,15 @@ bool FissionApplication::eventFilter(QObject *watched, QEvent *event) {
             if (name.contains("TextInput") || name.contains("TextEdit") || name.contains("TextField")
                 || name.contains("SpinBox") || name.contains("ComboBox"))
                 return QObject::eventFilter(watched, event);
+            if (m_drawingEdit) {
+                if (m_drawingEdit->canRedo()) {
+                    m_drawingEdit->redo();
+                    showMessage(QStringLiteral("Redo"));
+                } else {
+                    showMessage(QStringLiteral("Nothing to redo"));
+                }
+                return true;
+            }
             if (m_document && m_document->canRedo()) {
                 m_document->redo();
                 showMessage(QStringLiteral("Redo"));
@@ -82,6 +91,14 @@ bool FissionApplication::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     return QObject::eventFilter(watched, event);
+}
+
+void FissionApplication::setDrawingEditTarget(QObject *doc)
+{
+    auto *drawing = qobject_cast<DrawingDocument *>(doc);
+    if (m_drawingEdit == drawing) return;
+    m_drawingEdit = drawing;
+    emit drawingEditTargetChanged();
 }
 
 void FissionApplication::setAutosaveIntervalSec(int sec) {
@@ -111,12 +128,27 @@ QVariantList FissionApplication::pendingAutosaves() const {
 }
 
 bool FissionApplication::recoverAutosave(const QString &documentId) {
+    QString original;
+    for (const QVariant &v : pendingAutosaves()) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("documentId")).toString() == documentId) {
+            original = m.value(QStringLiteral("originalPath")).toString();
+            break;
+        }
+    }
     FissionDocument *doc = newDocument();
     if (!doc->loadAutosave(documentId)) {
         closeDocument(m_documents.indexOf(doc));
         return false;
     }
+    // Autosave snapshots omit drawing bodies. Keep the bodies from the last saved design.
+    if (!original.isEmpty())
+        doc->copyDrawingPayloadFromFile(original);
+    if (m_drawingManager)
+        m_drawingManager->restoreFromJson(doc->drawingPayload());
+    doc->setDrawingsLive(true);
     DocumentVersionStore::instance()->clearAutosave(documentId);
+    emit documentOpened(doc);
     showMessage(QStringLiteral("Recovered autosave for %1").arg(doc->name()));
     return true;
 }
@@ -508,6 +540,9 @@ bool FissionApplication::openDocument(const QString &pathOrUrl) {
         doc->deleteLater();
         return false;
     }
+    if (m_drawingManager)
+        m_drawingManager->restoreFromJson(doc->drawingPayload());
+    doc->setDrawingsLive(true);
     // Opening into the empty startup design replaces it instead of leaving an empty tab behind
     if (isPristine(m_document)) {
         const int i = m_documents.indexOf(m_document);
@@ -521,6 +556,7 @@ bool FissionApplication::openDocument(const QString &pathOrUrl) {
     } else {
         addDocument(doc);
     }
+    emit documentOpened(doc);
     showMessage(QString("Opened %1").arg(QFileInfo(path).fileName()));
     return true;
 }
@@ -548,6 +584,8 @@ bool FissionApplication::saveDocument(const QString &pathOrUrl) {
         return false;
     }
     if (QFileInfo(path).suffix().isEmpty()) path += ".f360";
+    if (m_document->drawingsLive() && m_drawingManager)
+        m_document->setDrawingPayload(m_drawingManager->toJsonForDesign(m_document->documentId()));
     if (!m_document->save(path)) {
         showMessage(QString("Save failed: %1").arg(m_document->lastError()));
         return false;

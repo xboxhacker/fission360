@@ -36,6 +36,8 @@ class FissionBody : public QObject {
     Q_PROPERTY(QVariantMap meshStats READ meshStats NOTIFY shapeChanged)
     // Id of the timeline feature that created the body
     Q_PROPERTY(QString sourceFeature READ sourceFeature NOTIFY shapeChanged)
+    // Id of the timeline feature that last changed the body (fillet, chamfer, press/pull, …)
+    Q_PROPERTY(QString editedBy READ editedBy NOTIFY shapeChanged)
 
 public:
     explicit FissionBody(QObject *parent = nullptr) : QObject(parent) {}
@@ -43,6 +45,8 @@ public:
     QString name() const { return m_name; }
     QString sourceFeature() const { return m_sourceFeature; }
     void setSourceFeature(const QString &id) { m_sourceFeature = id; }
+    QString editedBy() const { return m_editedBy; }
+    void setEditedBy(const QString &id) { m_editedBy = id; }
     const TopoDS_Shape &shape() const { return m_shape; }
     void setShape(const QString &name, const TopoDS_Shape &shape);
 
@@ -120,6 +124,7 @@ signals:
 private:
     QString m_name;
     QString m_sourceFeature;
+    QString m_editedBy;
     TopoDS_Shape m_shape;
     bool m_visible = true;
     QColor m_color = QColor(170, 178, 189);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #pragma once
+#include <QByteArray>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -22,12 +23,19 @@ struct Result {
     QString error;
 };
 
-// View directions matching DrawingView::orientation
+// View directions matching DrawingView::orientation.
+// Orthographic names plus eight isometric corners (isoFrontTopRight … isoBackBottomLeft).
+// "isometric" and "home" share the back-top-right projector.
 gp_Ax2 viewAxis(const QString &orientation);
 
 // Project every body in the design (or a single shape) into 2D line segments.
 Result project(FissionDocument *design, const QString &orientation, bool showHidden = false);
 Result projectShape(const TopoDS_Shape &shape, const QString &orientation, bool showHidden = false);
+
+// Shaded picture of the solid along viewAxis, as a PNG. Uses the shape's triangulation
+// (meshed on demand) and a Lambert shade. Empty when the shape has no triangles.
+QByteArray renderShadedPng(const TopoDS_Shape &shape, const QString &orientation, int longEdgePx = 420);
+QByteArray renderShadedPng(FissionDocument *design, const QString &orientation, int longEdgePx = 420);
 
 // Resolve a projected-view orientation from a parent orientation and a sheet direction
 // (up/down/left/right) under first- or third-angle projection.

@@ -6,46 +6,79 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import "../FissionApplication"
 
-// Drawing workspace — Fusion-like sheet: place base with orientation, Shift+drag to project,
-// pan/zoom the sheet, floating view inspector, clean floating views (no cards).
 Item {
-    id: drawingWS
+    id: ws
     anchors.fill: parent
 
     property var app
     property var drawingDoc: null
     property var activeSheet: null
-    property string activeTool: "select"   // select | baseView | projectedView | sectionView | detailView | text | dimension | centerMark
+    property string activeTool: "select"
     property string placeOrientation: "front"
     property var selectedView: null
-    property real dimStartX: 0
-    property real dimStartY: 0
-    property bool dimDragging: false
-    property real ghostX: 0
-    property real ghostY: 0
-    property bool ghostVisible: false
-
-    // Sheet camera (screen space over the paper host)
+    property string selectedNoteId: ""
+    property string editingNoteId: ""
+    property string editingDraft: ""
+    property bool noteCancel: false
+    // Set while the inspector closes so the press cannot land on the sheet underneath.
+    property bool suppressSheetPress: false
+    readonly property var orientationIds: [
+        "front", "top", "right", "left", "back", "bottom",
+        "isoFrontTopRight", "isoFrontTopLeft", "isoFrontBottomRight", "isoFrontBottomLeft",
+        "isoBackTopRight", "isoBackTopLeft", "isoBackBottomRight", "isoBackBottomLeft"
+    ]
+    readonly property var orientationLabels: [
+        "Front", "Top", "Right", "Left", "Back", "Bottom",
+        "Front top right", "Front top left", "Front bottom right", "Front bottom left",
+        "Back top right", "Back top left", "Back bottom right", "Back bottom left"
+    ]
     property real sheetZoom: 1.0
     property real sheetPanX: 0
     property real sheetPanY: 0
+    property string sheetSize: "A3"
+    property int projectionAngle: 1   // 0=first, 1=third
+    property int standard: 0          // 0=ISO, 1=ASME
+    property bool showHidden: false
 
-    readonly property var orientations: [
-        { id: "front", label: "Front" },
-        { id: "top", label: "Top" },
-        { id: "right", label: "Right" },
-        { id: "left", label: "Left" },
-        { id: "back", label: "Back" },
-        { id: "bottom", label: "Bottom" },
-        { id: "isometric", label: "Iso" }
-    ]
+    // Paper size follows the sheet (A0–A4, ANSI A–E, or a custom size). The fallback is A3.
+    readonly property real mmW: activeSheet && activeSheet.width > 0 ? activeSheet.width
+        : sheetSize === "A0" ? 1189 : sheetSize === "A1" ? 841 : sheetSize === "A2" ? 594
+        : sheetSize === "A4" ? 297 : sheetSize === "A" ? 279 : sheetSize === "B" ? 432
+        : sheetSize === "C" ? 559 : sheetSize === "D" ? 864 : sheetSize === "E" ? 1118 : 420
+    readonly property real mmH: activeSheet && activeSheet.height > 0 ? activeSheet.height
+        : sheetSize === "A0" ? 841 : sheetSize === "A1" ? 594 : sheetSize === "A2" ? 420
+        : sheetSize === "A4" ? 210 : sheetSize === "A" ? 216 : sheetSize === "B" ? 279
+        : sheetSize === "C" ? 432 : sheetSize === "D" ? 559 : sheetSize === "E" ? 864 : 297
+
+    // Interaction state
+    property bool placing: false
+    property real ghostX: 0
+    property real ghostY: 0
+    property bool dragView: false
+    property real dragOffX: 0
+    property real dragOffY: 0
+    property real dimStartX: 0
+    property real dimStartY: 0
+    property bool dimDragging: false
+    property real sectionStartX: 0
+    property real sectionStartY: 0
+    property bool sectionDragging: false
+    property real detailStartX: 0
+    property real detailStartY: 0
+    property bool detailDragging: false
 
     function syncSheet() {
         if (drawingDoc && drawingDoc.sheetCount > 0) {
             const idx = Math.max(0, Math.min(drawingDoc.activeSheetIndex, drawingDoc.sheetCount - 1))
             activeSheet = drawingDoc.sheet(idx)
+            if (activeSheet && activeSheet.size)
+                sheetSize = activeSheet.size
         } else {
             activeSheet = null
+        }
+        if (drawingDoc) {
+            standard = drawingDoc.standard === "ASME" ? 1 : 0
+            projectionAngle = drawingDoc.projectionAngle === "first" ? 0 : 1
         }
     }
 
@@ -53,53 +86,345 @@ Item {
         syncSheet()
         sheetZoom = 1; sheetPanX = 0; sheetPanY = 0
         selectedView = null
-        cancelPlace()
+        placing = false
+        activeTool = "select"
         Qt.callLater(maybeAutoPlaceBase)
     }
     Connections {
         target: drawingDoc
-        function onSheetsChanged() { syncSheet() }
+        function onSheetsChanged() {
+            const keep = selectedView ? selectedView.id : ""
+            syncSheet()
+            selectedView = null
+            if (!keep || !activeSheet) return
+            for (let i = 0; i < activeSheet.viewCount; ++i) {
+                const v = activeSheet.view(i)
+                if (v && v.id === keep) { selectedView = v; break }
+            }
+        }
         function onActiveSheetChanged() { syncSheet(); selectedView = null }
     }
 
     function designDoc() { return app ? app.doc : null }
 
-    function cancelPlace() {
-        activeTool = "select"
-        ghostVisible = false
+    // One drawing undo step. Nested calls share the snapshot taken by the outermost edit.
+    function edit(fn) {
+        if (drawingDoc) drawingDoc.beginEdit()
+        try { fn() } finally { if (drawingDoc) drawingDoc.endEdit() }
     }
+
+    readonly property var scaleSteps: [0.1, 0.2, 0.25, 0.5, 1, 2, 4, 5, 10]
+    function stepScale(dir) {
+        if (!selectedView) return
+        const s = Number(selectedView.scale)
+        let best = 0
+        for (let i = 0; i < scaleSteps.length; ++i)
+            if (scaleSteps[i] <= s + 0.001) best = i
+        const n = Math.max(0, Math.min(scaleSteps.length - 1, best + dir))
+        const view = selectedView
+        edit(() => { view.scale = scaleSteps[n] })
+    }
+
+    function drawingScaleLabel(scale) {
+        const s = Number(scale)
+        if (!isFinite(s) || s <= 0) return "1:1"
+        const nice = [1, 2, 4, 5, 8, 10, 20, 25, 50, 100]
+        for (let i = 0; i < nice.length; ++i) {
+            const n = nice[i]
+            if (Math.abs(s - n) < 0.001) return n + ":1"
+            if (Math.abs(s * n - 1) < 0.001) return "1:" + n
+        }
+        return s.toFixed(s < 1 ? 3 : 2)
+    }
+
+    // Pick a sheet scale so the outline is large enough to read when the sheet is fit.
+    function niceScale(viewW, viewH) {
+        const w = Math.max(1, viewW), h = Math.max(1, viewH)
+        const fit = Math.min(mmW * 0.34 / w, mmH * 0.34 / h)
+        const nice = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 4, 5, 10, 20, 50, 100]
+        let best = nice[0]
+        for (let i = 0; i < nice.length; ++i) if (nice[i] <= fit + 1e-9) best = nice[i]
+        if (best * Math.min(w, h) < 25) {
+            const i = nice.indexOf(best)
+            if (i >= 0 && i + 1 < nice.length) best = nice[i + 1]
+        }
+        return best
+    }
+
+    function orientationIndex(id) {
+        let key = id || "front"
+        if (key === "isometric" || key === "home") key = "isoBackTopRight"
+        const i = orientationIds.indexOf(key)
+        return i < 0 ? 0 : i
+    }
+
+    function noteTextOf(id) {
+        if (!activeSheet || !id) return ""
+        const n = activeSheet.annotationCount
+        for (let i = 0; i < n; ++i) {
+            const a = activeSheet.annotation(i)
+            if (a && a.id === id) return a.text || ""
+        }
+        return ""
+    }
+
+    function beginNoteEdit(id) {
+        if (!id) return
+        selectedView = null
+        selectedNoteId = id
+        noteCancel = false
+        editingDraft = noteTextOf(id)
+        if (!editingDraft) editingDraft = "Note"
+        editingNoteId = id
+        if (noteField) noteField.text = editingDraft
+    }
+
+    function commitNoteEdit() {
+        if (noteCancel) { noteCancel = false; return }
+        const id = editingNoteId
+        const text = editingDraft
+        editingNoteId = ""
+        if (!id || !activeSheet) return
+        if (text === noteTextOf(id)) return
+        edit(() => activeSheet.updateAnnotation(id, { text: text }))
+        if (noteField && selectedNoteId === id) noteField.text = text
+    }
+
+    function cancelNoteEdit() {
+        noteCancel = true
+        const id = editingNoteId || selectedNoteId
+        editingNoteId = ""
+        editingDraft = noteTextOf(id)
+        if (noteField && selectedNoteId === id) noteField.text = editingDraft
+        Qt.callLater(() => { noteCancel = false })
+    }
+
+    function dismissInspector() {
+        suppressSheetPress = true
+        if (editingNoteId) cancelNoteEdit()
+        selectedView = null
+        selectedNoteId = ""
+        Qt.callLater(() => { suppressSheetPress = false })
+    }
+
+    function idleStatus() {
+        fissionApp.showMessage("Wheel zoom · middle-drag pan · Shift+drag a view to project · F fit")
+    }
+
+    function finishPlace(msg) {
+        activeTool = "select"
+        placing = false
+        dimDragging = false
+        sectionDragging = false
+        detailDragging = false
+        fissionApp.showMessage(msg || "Wheel zoom · middle-drag pan · Shift+drag a view to project · F fit")
+    }
+
+    function cancelPlace() { finishPlace() }
 
     function beginBaseView(orient) {
         if (orient) placeOrientation = orient
         activeTool = "baseView"
-        ghostVisible = true
-        fissionApp.showMessage("Base View — pick orientation, click the sheet to place (Esc cancels)")
+        placing = true
+        fissionApp.showMessage("Base View — click the sheet to place (Esc cancels)")
     }
 
     function beginProjectMode() {
         if (!selectedView) {
-            fissionApp.showMessage("Select a parent view, then Shift+drag it — or click Projected View")
+            fissionApp.showMessage("Select a parent view first, then Shift+drag to project")
             return
         }
         activeTool = "projectedView"
-        fissionApp.showMessage("Projected View — Shift+drag from the parent toward the projection direction")
+        fissionApp.showMessage("Projected View — Shift+drag from the parent view")
     }
 
-    function projectView(view) {
-        if (!view || !fissionApp.drawingManager) return false
+    function beginSectionMode() {
+        if (!selectedView) {
+            fissionApp.showMessage("Select a parent view first")
+            return
+        }
+        activeTool = "sectionView"
+        placing = true
+        fissionApp.showMessage("Section View — drag a cut line across the parent view")
+    }
+
+    function beginDetailMode() {
+        if (!selectedView) {
+            fissionApp.showMessage("Select a parent view first")
+            return
+        }
+        activeTool = "detailView"
+        placing = true
+        fissionApp.showMessage("Detail View — click and drag a circle on the parent view")
+    }
+
+    function beginDimensionMode() {
+        activeTool = "dimension"
+        fissionApp.showMessage("Dimension — click two points to measure")
+    }
+
+    function beginTextMode() {
+        activeTool = "text"
+        placing = true
+        fissionApp.showMessage("Text — click to place a note")
+    }
+
+    function beginHoleNoteMode() {
+        activeTool = "holeNote"
+        placing = true
+        fissionApp.showMessage("Hole Note — click the sheet to place (Esc cancels)")
+    }
+
+    function beginCenterMarkMode() {
+        activeTool = "centerMark"
+        placing = true
+        fissionApp.showMessage("Center Mark — click the sheet to place (Esc cancels)")
+    }
+
+    function beginAuxMode() {
+        if (!selectedView) {
+            fissionApp.showMessage("Select a parent view first")
+            return
+        }
+        activeTool = "auxiliaryView"
+        placing = true
+        fissionApp.showMessage("Auxiliary View — click the sheet to place (Esc cancels)")
+    }
+
+    function toggleHiddenLines() {
+        showHidden = !showHidden
+        if (selectedView) {
+            selectedView.showHiddenLines = showHidden
+            fissionApp.drawingManager.projectView(selectedView, designDoc(), drawingDoc)
+        }
+        fissionApp.showMessage(showHidden ? "Hidden lines on" : "Hidden lines off")
+    }
+
+    function beginPartsListMode() {
+        activeTool = "partsList"
+        placing = true
+        fissionApp.showMessage("Parts List — click to place the table")
+    }
+
+    function beginRevisionMode() {
+        activeTool = "revision"
+        placing = true
+        fissionApp.showMessage("Revision Table — click to place the table")
+    }
+
+    function tidyUp() {
+        if (!activeSheet) return
+        // Auto-arrange: place base view top-left, projected views around it
+        const views = activeSheet.views
+        if (views.length === 0) return
+        const base = views.find(v => v.type === "base")
+        if (!base) return
+        edit(() => {
+            base.position = Qt.point(30, 30)
+            let i = 0
+            for (const v of views) {
+                if (v === base) continue
+                i++
+                const gap = 10
+                const w = Math.max(20, v.width * v.scale)
+                const h = Math.max(16, v.height * v.scale)
+                if (i % 2 === 1)
+                    v.position = Qt.point(base.position.x + w + gap, base.position.y + (i / 2) * (h + gap))
+                else
+                    v.position = Qt.point(base.position.x, base.position.y + h + gap + (i / 2) * (h + gap))
+            }
+        })
+        fissionApp.showMessage("Tidied up")
+    }
+
+    // Zoom is a transform on the sheet (origin at the canvas centre), so curves are not rebuilt
+    // on each wheel tick. The pan update keeps the point under the cursor fixed.
+    function zoomAt(factor, sx, sy) {
+        const old = sheetZoom
+        const next = Math.max(0.25, Math.min(6, sheetZoom * factor))
+        if (old > 0 && sheetXform) {
+            const k = next / old
+            const ox = sheetXform.width * 0.5
+            const oy = sheetXform.height * 0.5
+            sheetPanX = (sx - ox) * (1 - k) + sheetPanX * k
+            sheetPanY = (sy - oy) * (1 - k) + sheetPanY * k
+        }
+        sheetZoom = next
+    }
+
+    function fitSheet() {
+        sheetZoom = 1
+        sheetPanX = 0
+        sheetPanY = 0
+    }
+
+    // px, py are in the sheet item's own pixels (already inside the zoom transform).
+    function paperToMm(px, py) {
+        const s = Math.max(0.01, sheetCanvas.fitScale)
+        return Qt.point(px / s, py / s)
+    }
+
+    function projectOnto(view) {
+        if (!view) return false
         const ok = fissionApp.drawingManager.projectView(view, designDoc(), drawingDoc)
-        if (!ok)
-            fissionApp.showMessage(fissionApp.drawingManager.lastError || "Projection failed")
+        if (!ok) fissionApp.showMessage(fissionApp.drawingManager.lastError || "Projection failed")
         return ok
     }
 
-    function paperToMm(px, py) {
-        const s = paper.fitScale * sheetZoom
-        return Qt.point(px / Math.max(0.01, s), py / Math.max(0.01, s))
+    // One projection, on this UI thread, then a scale that fills about a third of the sheet.
+    function placeBaseAt(mmX, mmY) {
+        if (!activeSheet) return
+        let view = null
+        edit(() => {
+        view = activeSheet.addView("base", {
+            position: Qt.point(mmX, mmY),
+            scale: 1.0,
+            orientation: placeOrientation,
+            showHiddenLines: showHidden
+        })
+        projectOnto(view)
+        const sc = niceScale(view.width, view.height)
+        view.scale = sc
+        const vw = Math.max(20, view.width * sc)
+        const vh = Math.max(16, view.height * sc)
+        view.position = Qt.point(mmX - vw * 0.5, mmY - vh * 0.5)
+        selectedView = view
+        })
+        finishPlace("Base view placed (" + drawingScaleLabel(view ? view.scale : 1) + ")")
     }
 
+    function regenerateAll() {
+        if (!activeSheet) return
+        let n = 0
+        edit(() => { n = fissionApp.drawingManager.regenerateSheet(activeSheet, designDoc(), drawingDoc) })
+        if (drawingDoc && designDoc()) {
+            drawingDoc.setSourceDesignRevision(designDoc().contentRevision)
+            designDoc().linkAsset("drawing", drawingDoc.id, drawingDoc.name)
+        }
+        fissionApp.showMessage("Regenerated " + n + " view(s)")
+    }
+    function exportPdf() { exportDialog.kind = "pdf"; exportDialog.open() }
+    function exportDxf() { exportDialog.kind = "dxf"; exportDialog.open() }
+    function exportPng() { exportDialog.kind = "png"; exportDialog.open() }
+    function exportTiff() { exportDialog.kind = "tiff"; exportDialog.open() }
+    function addPartsList() {
+        if (!activeSheet) return
+        edit(() => fissionApp.drawingManager.addPartsList(activeSheet, designDoc(), Qt.point(20, 40)))
+        fissionApp.showMessage("Parts list placed")
+    }
+    function addRevisionTable() {
+        if (!activeSheet) return
+        edit(() => fissionApp.drawingManager.addRevisionTable(activeSheet, Qt.point(20, 40)))
+        fissionApp.showMessage("Revision table placed")
+    }
+    function addBendTable() {
+        if (!activeSheet) return
+        edit(() => fissionApp.drawingManager.addBendTable(activeSheet, designDoc(), Qt.point(20, 40)))
+        fissionApp.showMessage("Bend table placed")
+    }
+    function insertImage() { imageDialog.open() }
+
     function orientationForProject(parentOrient, dir) {
-        // Third-angle orthographic graph (screen: +x right, +y down)
         const first = drawingDoc && drawingDoc.projectionAngle === "first"
         const map = {
             front:  { right: "right", left: "left", up: "top", down: "bottom" },
@@ -121,164 +446,738 @@ Item {
         return row[d] || "right"
     }
 
-    function placeProjected(parent, dir) {
-        if (!activeSheet || !parent) return
-        const gap = 25
-        const pw = Math.max(20, parent.width * parent.scale)
-        const ph = Math.max(16, parent.height * parent.scale)
-        let px = parent.position.x, py = parent.position.y
-        if (dir === "right") px += pw + gap
-        else if (dir === "left") px -= pw + gap
-        else if (dir === "up") py -= ph + gap
-        else if (dir === "down") py += ph + gap
-
-        const childOrient = orientationForProject(parent.orientation || "front", dir)
-        const view = activeSheet.addView("projected", {
-            position: Qt.point(px, py),
-            scale: parent.scale,
-            orientation: childOrient,
-            parentViewId: parent.id,
+    function projectFrom(view, dir) {
+        if (!view || !activeSheet) return
+        edit(() => { projectFromNow(view, dir) })
+    }
+    function projectFromNow(view, dir) {
+        if (!view || !activeSheet) return
+        const orient = orientationForProject(view.orientation || "front", dir)
+        const gap = 20
+        let x = view.position.x, y = view.position.y
+        if (dir === "right") x += view.width * view.scale + gap
+        else if (dir === "left") x -= view.width * view.scale + gap
+        else if (dir === "down") y += view.height * view.scale + gap
+        else y -= view.height * view.scale + gap
+        const child = activeSheet.addView("projected", {
+            position: Qt.point(x, y),
+            scale: view.scale,
+            orientation: orient,
+            parentViewId: view.id,
             projectDirection: dir,
-            showHiddenLines: parent.showHiddenLines
+            showHiddenLines: showHidden
         })
-        projectView(view)
-        selectedView = view
-        cancelPlace()
-        fissionApp.showMessage("Projected " + childOrient + " view")
-    }
-
-    function placeBaseAt(mmX, mmY) {
-        if (!activeSheet) return
-        const view = activeSheet.addView("base", {
-            position: Qt.point(mmX, mmY),
-            scale: suggestScale(),
-            orientation: placeOrientation,
-            showHiddenLines: false
-        })
-        projectView(view)
-        selectedView = view
-        cancelPlace()
-        fissionApp.showMessage("Base view (" + placeOrientation + ")")
-    }
-
-    function placeSectionOrDetail(type, mmX, mmY) {
-        if (!activeSheet || !selectedView) {
-            fissionApp.showMessage("Select a parent view first")
-            return
-        }
-        const opts = {
-            position: Qt.point(mmX, mmY),
-            scale: type === "detail" ? selectedView.scale * 2 : selectedView.scale,
-            orientation: selectedView.orientation,
-            parentViewId: selectedView.id,
-            projectDirection: "right",
-            showHiddenLines: false
-        }
-        if (type === "detail") {
-            opts.detailRadius = 20
-            opts.detailCenter = Qt.point(0, 0)
-        }
-        const view = activeSheet.addView(type, opts)
-        projectView(view)
-        selectedView = view
-        cancelPlace()
-        fissionApp.showMessage((type === "section" ? "Section" : "Detail") + " view placed")
-    }
-
-    function suggestScale() {
-        if (!activeSheet || !designDoc()) return 1.0
-        // Fit roughly a third of the sheet width
-        return 1.0
+        projectOnto(child)
+        selectedView = child
+        finishPlace("Projected " + orient + " view")
     }
 
     function maybeAutoPlaceBase() {
-        if (!activeSheet || activeSheet.viewCount > 0) return
-        // Center a front base view so a new drawing isn't an empty sheet
-        const cx = Math.max(20, activeSheet.width * 0.35 - 30)
-        const cy = Math.max(20, activeSheet.height * 0.4 - 20)
-        placeOrientation = "front"
-        placeBaseAt(cx, cy)
-        fissionApp.showMessage("Drawing opened — Front base view placed. Shift+drag to project.")
-    }
-
-    function regenerateAll() {
         if (!activeSheet) return
-        const n = fissionApp.drawingManager.regenerateSheet(activeSheet, designDoc(), drawingDoc)
-        if (drawingDoc && designDoc()) {
-            drawingDoc.setSourceDesignRevision(designDoc().contentRevision)
-            designDoc().linkAsset("drawing", drawingDoc.id, drawingDoc.name)
-        }
-        fissionApp.showMessage("Regenerated " + n + " view(s)")
-    }
-    function updateFromDesign() {
-        const design = designDoc()
-        if (!drawingDoc || !design) {
-            fissionApp.showMessage("No design linked to this drawing")
+        if (activeSheet.viewCount > 0) {
+            // Saved curves stay on the sheet until they are projected again. Opening the
+            // drawing rebuilds them so a round edge is not left as the old coarse polyline.
+            if (designDoc() && designDoc().bodyCount > 0)
+                fissionApp.drawingManager.regenerateSheet(activeSheet, designDoc(), drawingDoc)
             return
         }
-        const n = fissionApp.drawingManager.updateDrawingFromDesign(drawingDoc, design)
-        fissionApp.showMessage(n
-            ? ("Drawing updated from design — " + n + " view(s), now current")
-            : (fissionApp.drawingManager.lastError || "Nothing to update"))
-    }
-    readonly property bool drawingOutOfDate: {
-        const d = drawingDoc, design = designDoc()
-        if (!d || !design) return false
-        d.outOfDate
-        design.contentRevision
-        return d.sourceDesignRevision !== design.contentRevision
+        if (!designDoc() || designDoc().bodyCount < 1) {
+            finishPlace("Drawing opened")
+            return
+        }
+        // Project the current design once, here on the UI thread, then leave placement mode.
+        placeOrientation = "front"
+        placeBaseAt(mmW * 0.38, mmH * 0.40)
     }
 
-    function addTextAt(mx, my, text) {
-        if (!activeSheet) return
-        const p = paperToMm(mx, my)
-        activeSheet.addAnnotation({ kind: "text", x: p.x, y: p.y, text: text || "Note", fontSize: 3.5 })
-    }
-
-    function addDimension(x1, y1, x2, y2) {
-        if (!activeSheet) return
-        const a = paperToMm(x1, y1), b = paperToMm(x2, y2)
-        const len = Math.hypot(b.x - a.x, b.y - a.y)
-        activeSheet.addAnnotation({
-            kind: "dimension", x: a.x, y: a.y, x2: b.x, y2: b.y,
-            text: len.toFixed(2) + " mm"
+    // The stock combo list is positioned under the control. Once it is reparented to the
+    // window overlay, that position is the top-left of the window, which lands on the file browser.
+    function pinComboPopup(box) {
+        if (!box || !box.popup) return
+        box.popup.parent = Overlay.overlay
+        box.popup.z = 2000
+        box.popup.aboutToShow.connect(function() {
+            const p = box.mapToItem(Overlay.overlay, 0, box.height)
+            box.popup.x = p.x
+            box.popup.y = p.y
+            box.popup.width = box.width
         })
     }
 
-    function exportPdf() { exportDialog.kind = "pdf"; exportDialog.open() }
-    function exportDxf() { exportDialog.kind = "dxf"; exportDialog.open() }
-    function exportPng() { exportDialog.kind = "png"; exportDialog.open() }
-    function exportTiff() { exportDialog.kind = "tiff"; exportDialog.open() }
-    function addPartsList() {
-        if (!activeSheet) return
-        fissionApp.drawingManager.addPartsList(activeSheet, designDoc(), Qt.point(20, 40))
-        fissionApp.showMessage("Parts list placed")
-    }
-    function addRevisionTable() {
-        if (!activeSheet) return
-        fissionApp.drawingManager.addRevisionTable(activeSheet, Qt.point(20, 40))
-        fissionApp.showMessage("Revision table placed")
-    }
-    function addBendTable() {
-        if (!activeSheet) return
-        fissionApp.drawingManager.addBendTable(activeSheet, designDoc(), Qt.point(20, 40))
-        fissionApp.showMessage("Bend table placed")
-    }
-    function insertImage() { imageDialog.open() }
+    // Commands live on the DRAWING ribbon. Fit stays on the sheet because it is the
+    // zoom reset for the paper itself.
+    Rectangle {
+        id: sheetCanvas
+        anchors.fill: parent
+        color: "#1A1A1A"
+        clip: true
 
-    function zoomAt(factor, sx, sy) {
-        const old = sheetZoom
-        sheetZoom = Math.max(0.25, Math.min(6, sheetZoom * factor))
-        // Keep the point under the cursor stable
-        sheetPanX = sx - (sx - sheetPanX) * (sheetZoom / old)
-        sheetPanY = sy - (sy - sheetPanY) * (sheetZoom / old)
+        readonly property real fitScale: Math.min(
+            (sheetCanvas.width - 40) / ws.mmW,
+            (sheetCanvas.height - 40) / ws.mmH
+        )
+
+        // Pan and zoom are one transform, so wheel and drag do not rebuild the sheet.
+        Item {
+            id: sheetXform
+            width: parent.width
+            height: parent.height
+            x: ws.sheetPanX
+            y: ws.sheetPanY
+            scale: ws.sheetZoom
+            transformOrigin: Item.Center
+
+        Rectangle {
+            id: sheet
+            anchors.centerIn: parent
+            width: ws.mmW * sheetCanvas.fitScale
+            height: ws.mmH * sheetCanvas.fitScale
+            color: "white"
+            border.color: "#333"
+            border.width: 1
+
+            // ── TITLE BLOCK ───────────────────────────────────────────────
+            Rectangle {
+                id: titleBlock
+                x: parent.width - 180 * sheetCanvas.fitScale
+                y: parent.height - 60 * sheetCanvas.fitScale
+                width: 180 * sheetCanvas.fitScale
+                height: 60 * sheetCanvas.fitScale
+                color: "white"
+                border.color: "#333"
+                border.width: 1
+
+                Text {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.margins: 6 * sheetCanvas.fitScale
+                    text: (ws.activeSheet && ws.activeSheet.partName) ? ws.activeSheet.partName : "Fission 360"
+                    font.pixelSize: 14 * sheetCanvas.fitScale
+                    font.bold: true
+                }
+
+                Text {
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.margins: 6 * sheetCanvas.fitScale
+                    text: (ws.activeSheet ? ws.activeSheet.size : ws.sheetSize)
+                          + " · " + (ws.drawingDoc ? ws.drawingDoc.standard : (ws.standard === 0 ? "ISO" : "ASME"))
+                          + " · " + ((ws.drawingDoc ? ws.drawingDoc.projectionAngle === "first" : ws.projectionAngle === 0) ? "1st" : "3rd")
+                          + " Angle"
+                    font.pixelSize: 10 * sheetCanvas.fitScale
+                    color: "#666"
+                }
+
+                Text {
+                    anchors.bottom: parent.bottom
+                    anchors.left: parent.left
+                    anchors.margins: 6 * sheetCanvas.fitScale
+                    text: {
+                        const rev = ws.activeSheet ? ws.activeSheet.revision : "A"
+                        const who = ws.activeSheet && ws.activeSheet.drawnBy ? ws.activeSheet.drawnBy : ""
+                        const when = ws.activeSheet && ws.activeSheet.date ? ws.activeSheet.date : Qt.formatDate(new Date(), "yyyy-MM-dd")
+                        return (who ? who + "  " : "") + "Rev " + rev + "  |  " + when
+                    }
+                    font.pixelSize: 10 * sheetCanvas.fitScale
+                    color: "#666"
+                }
+            }
+
+            // ── VIEWS ─────────────────────────────────────────────────────
+            Repeater {
+                model: ws.activeSheet ? ws.activeSheet.viewCount : 0
+                delegate: DrawingViewItem {
+                    required property int index
+                    readonly property var viewObj: ws.activeSheet ? ws.activeSheet.view(index) : null
+                    view: viewObj
+                    selection: ws.app ? ws.app.selection : null
+                    paperScale: sheetCanvas.fitScale
+                    interactive: ws.activeTool === "select" || ws.activeTool === "projectedView"
+                    selected: viewObj && ws.selectedView && viewObj.id === ws.selectedView.id
+                    x: viewObj ? viewObj.position.x * paperScale - framePad : 0
+                    y: viewObj ? viewObj.position.y * paperScale - framePad : 0
+                    onClicked: ws.selectedView = viewObj
+                    onDragFinished: (nx, ny) => {
+                        if (!viewObj) return
+                        const v = viewObj
+                        ws.edit(() => { v.position = Qt.point((nx + framePad) / paperScale, (ny + framePad) / paperScale) })
+                    }
+                    onProjectDrag: (dir) => ws.projectFrom(viewObj, dir)
+                }
+            }
+
+            Repeater {
+                model: ws.activeSheet ? ws.activeSheet.annotationCount : 0
+                delegate: Item {
+                    id: annItem
+                    required property int index
+                    readonly property var ann: ws.activeSheet ? ws.activeSheet.annotation(index) : ({})
+                    x: (ann.x || 0) * sheetCanvas.fitScale
+                    y: (ann.y || 0) * sheetCanvas.fitScale
+                    z: 8
+                    width: ann.kind === "text" ? Math.max(12, noteLabel.implicitWidth, noteInput.visible ? Math.max(80, noteInput.implicitWidth) : 0) : 1
+                    height: ann.kind === "text" ? Math.max(14, noteLabel.implicitHeight) : 1
+                    Canvas {
+                        width: 240; height: 80
+                        anchors.centerIn: parent
+                        visible: ann.kind === "dimension" || ann.kind === "leader"
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = "#222"
+                            ctx.lineWidth = 1
+                            const x2 = ((ann.x2 || ann.x) - ann.x) * sheetCanvas.fitScale
+                            const y2 = ((ann.y2 || ann.y) - ann.y) * sheetCanvas.fitScale
+                            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(x2, y2); ctx.stroke()
+                            const len = Math.hypot(x2, y2) || 1
+                            const ux = x2 / len, uy = y2 / len
+                            function arrow(atx, aty, sx, sy) {
+                                ctx.beginPath()
+                                ctx.moveTo(atx, aty)
+                                ctx.lineTo(atx - sx * 7 + sy * 3, aty - sy * 7 - sx * 3)
+                                ctx.lineTo(atx - sx * 7 - sy * 3, aty - sy * 7 + sx * 3)
+                                ctx.closePath(); ctx.fillStyle = "#222"; ctx.fill()
+                            }
+                            arrow(0, 0, -ux, -uy)
+                            arrow(x2, y2, ux, uy)
+                        }
+                    }
+                    Text {
+                        id: noteLabel
+                        visible: (ann.kind === "holeNote" || ann.kind === "dimension" || ann.kind === "text")
+                                 && ws.editingNoteId !== ann.id
+                        text: ann.text || (ann.kind === "holeNote" ? "Hole" : "")
+                        font.pixelSize: Math.max(9, (ann.fontSize || 3.5) * sheetCanvas.fitScale)
+                        color: ws.selectedNoteId === ann.id && ann.kind === "text" ? "#1a4f9c" : "#222"
+                    }
+                    TextInput {
+                        id: noteInput
+                        z: 2
+                        visible: ann.kind === "text" && ws.editingNoteId === ann.id
+                        font.pixelSize: noteLabel.font.pixelSize
+                        color: "#111"
+                        selectByMouse: true
+                        width: Math.max(80, implicitWidth + 8)
+                        onTextEdited: ws.editingDraft = text
+                        onAccepted: ws.commitNoteEdit()
+                        onActiveFocusChanged: if (!activeFocus && ws.editingNoteId === ann.id) ws.commitNoteEdit()
+                        Keys.onEscapePressed: (e) => { ws.cancelNoteEdit(); e.accepted = true }
+                        onVisibleChanged: if (visible) { text = ws.editingDraft; forceActiveFocus(); selectAll() }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        z: 1
+                        enabled: ann.kind === "text" && ws.editingNoteId !== ann.id
+                        acceptedButtons: Qt.LeftButton
+                        onClicked: {
+                            ws.selectedView = null
+                            ws.selectedNoteId = ann.id
+                            ws.editingDraft = ann.text || "Note"
+                            if (noteField) {
+                                noteField.text = ws.editingDraft
+                                noteField.forceActiveFocus()
+                                noteField.selectAll()
+                            }
+                        }
+                        onDoubleClicked: ws.beginNoteEdit(ann.id)
+                    }
+                    Image {
+                        visible: ann.kind === "image" && !!ann.path
+                        source: ann.path ? ("file:///" + String(ann.path).replace(/\\/g, "/")) : ""
+                        width: (ann.width || 40) * sheetCanvas.fitScale
+                        height: (ann.height || 30) * sheetCanvas.fitScale
+                        fillMode: Image.PreserveAspectFit
+                    }
+                    Canvas {
+                        visible: ann.kind === "centerMark"
+                        width: 24; height: 24
+                        anchors.centerIn: parent
+                        onPaint: {
+                            const ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = "#333"
+                            ctx.beginPath()
+                            ctx.moveTo(12, 2); ctx.lineTo(12, 22)
+                            ctx.moveTo(2, 12); ctx.lineTo(22, 12)
+                            ctx.stroke()
+                        }
+                    }
+                }
+            }
+
+            Repeater {
+                model: ws.activeSheet ? ws.activeSheet.tableCount : 0
+                delegate: Rectangle {
+                    required property int index
+                    readonly property var tbl: ws.activeSheet ? ws.activeSheet.table(index) : ({})
+                    x: (tbl.x || 0) * sheetCanvas.fitScale
+                    y: (tbl.y || 0) * sheetCanvas.fitScale
+                    z: 8
+                    width: {
+                        const cols = tbl.colWidths || [20, 20, 40]
+                        let w = 0
+                        for (let i = 0; i < cols.length; ++i) w += cols[i]
+                        return Math.max(40, w) * sheetCanvas.fitScale
+                    }
+                    height: ((tbl.rows ? tbl.rows.length : 1) * 5 + 6) * sheetCanvas.fitScale
+                    color: "#fafafa"
+                    border.color: "#666"
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        Text {
+                            text: tbl.title || "Table"
+                            font.pixelSize: Math.max(8, 2.6 * sheetCanvas.fitScale)
+                            font.bold: true
+                            color: "#222"
+                        }
+                        Repeater {
+                            model: tbl.rows || []
+                            delegate: Text {
+                                required property var modelData
+                                text: Array.isArray(modelData) ? modelData.join("  ") : String(modelData)
+                                font.pixelSize: Math.max(7, 2.2 * sheetCanvas.fitScale)
+                                color: "#333"
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                id: ghost
+                visible: ws.placing && (ws.activeTool === "baseView" || ws.activeTool === "text"
+                         || ws.activeTool === "partsList" || ws.activeTool === "revision"
+                         || ws.activeTool === "auxiliaryView")
+                x: ws.ghostX - width / 2
+                y: ws.ghostY - height / 2
+                width: 90
+                height: 70
+                color: Qt.rgba(0, 102 / 255, 204 / 255, 0.15)
+                border.color: "#0066CC"
+                border.width: 2
+                z: 40
+            }
+
+            Rectangle {
+                id: dimPreview
+                visible: ws.dimDragging
+                x: Math.min(ws.dimStartX, x2)
+                y: Math.min(ws.dimStartY, y2)
+                width: Math.abs(x2 - ws.dimStartX)
+                height: Math.abs(y2 - ws.dimStartY)
+                color: Qt.rgba(204 / 255, 0, 0, 0.1)
+                border.color: "#CC0000"
+                border.width: 1
+                property real x2: 0
+                property real y2: 0
+                z: 40
+            }
+
+            Rectangle {
+                id: sectionLine
+                visible: ws.sectionDragging
+                x: Math.min(ws.sectionStartX, x2)
+                y: Math.min(ws.sectionStartY, y2)
+                width: Math.abs(x2 - ws.sectionStartX) || 2
+                height: Math.abs(y2 - ws.sectionStartY) || 2
+                color: Qt.rgba(204 / 255, 0, 0, 0.3)
+                border.color: "#CC0000"
+                border.width: 2
+                property real x2: 0
+                property real y2: 0
+                z: 40
+            }
+
+            // Under the views. Left clicks on a view hit the view; empty paper hits this.
+            MouseArea {
+                id: sheetMouse
+                anchors.fill: parent
+                z: 1
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton
+                cursorShape: (ws.placing || ws.activeTool === "dimension" || ws.activeTool === "sectionView"
+                              || ws.activeTool === "detailView")
+                             ? Qt.CrossCursor : Qt.ArrowCursor
+                onPressed: (m) => {
+                    ws.forceActiveFocus()
+                    if (ws.activeTool === "dimension") {
+                        ws.dimStartX = m.x; ws.dimStartY = m.y
+                        ws.dimDragging = true
+                        dimPreview.x2 = m.x; dimPreview.y2 = m.y
+                        return
+                    }
+                    if (ws.activeTool === "sectionView") {
+                        ws.sectionStartX = m.x; ws.sectionStartY = m.y
+                        ws.sectionDragging = true
+                        sectionLine.x2 = m.x; sectionLine.y2 = m.y
+                        return
+                    }
+                    if (ws.activeTool === "detailView") {
+                        ws.detailStartX = m.x; ws.detailStartY = m.y
+                        ws.detailDragging = true
+                        return
+                    }
+                    const p = ws.paperToMm(m.x, m.y)
+                    if (ws.activeTool === "baseView") {
+                        ws.placeBaseAt(p.x, p.y)
+                    } else if (ws.activeTool === "auxiliaryView" && ws.selectedView) {
+                        ws.edit(() => {
+                            const view = ws.activeSheet.addView("auxiliary", {
+                                position: Qt.point(p.x, p.y),
+                                scale: ws.selectedView.scale,
+                                orientation: "isometric",
+                                parentViewId: ws.selectedView.id,
+                                showHiddenLines: ws.showHidden
+                            })
+                            ws.projectOnto(view)
+                            ws.selectedView = view
+                        })
+                        ws.finishPlace("Auxiliary view placed")
+                    } else if (ws.activeTool === "text") {
+                        let id = ""
+                        ws.edit(() => {
+                            id = ws.activeSheet.addAnnotation({ kind: "text", x: p.x, y: p.y, text: "Note", fontSize: 3.5 })
+                        })
+                        ws.beginNoteEdit(id)
+                        ws.finishPlace("Note placed — type to edit, Enter commits, Esc cancels")
+                    } else if (ws.activeTool === "holeNote") {
+                        ws.edit(() => ws.activeSheet.addAnnotation({ kind: "holeNote", x: p.x, y: p.y, text: "Hole", radius: 5 }))
+                        ws.finishPlace("Hole note placed")
+                    } else if (ws.activeTool === "partsList") {
+                        ws.edit(() => fissionApp.drawingManager.addPartsList(ws.activeSheet, ws.designDoc(), p))
+                        ws.finishPlace("Parts list placed")
+                    } else if (ws.activeTool === "revision") {
+                        ws.edit(() => fissionApp.drawingManager.addRevisionTable(ws.activeSheet, p))
+                        ws.finishPlace("Revision table placed")
+                    } else if (ws.activeTool === "centerMark") {
+                        ws.edit(() => ws.activeSheet.addAnnotation({ kind: "centerMark", x: p.x, y: p.y }))
+                        ws.finishPlace("Center mark placed")
+                    } else {
+                        if (ws.suppressSheetPress) return
+                        ws.selectedView = null
+                        if (ws.editingNoteId) ws.cancelNoteEdit()
+                        ws.selectedNoteId = ""
+                    }
+                }
+                onPositionChanged: (m) => {
+                    if (ws.placing) { ws.ghostX = m.x; ws.ghostY = m.y }
+                    if (ws.dimDragging) { dimPreview.x2 = m.x; dimPreview.y2 = m.y }
+                    if (ws.sectionDragging) { sectionLine.x2 = m.x; sectionLine.y2 = m.y }
+                }
+                onReleased: (m) => {
+                    if (ws.dimDragging) {
+                        const a = ws.paperToMm(ws.dimStartX, ws.dimStartY)
+                        const b = ws.paperToMm(m.x, m.y)
+                        const len = Math.hypot(b.x - a.x, b.y - a.y)
+                        ws.edit(() => ws.activeSheet.addAnnotation({
+                            kind: "dimension", x: a.x, y: a.y, x2: b.x, y2: b.y,
+                            text: len.toFixed(2) + " mm"
+                        }))
+                        ws.finishPlace("Dimension placed")
+                    } else if (ws.sectionDragging && ws.selectedView) {
+                        const a = ws.paperToMm(ws.sectionStartX, ws.sectionStartY)
+                        const b = ws.paperToMm(m.x, m.y)
+                        let dir = "right"
+                        if (Math.abs(b.x - a.x) >= Math.abs(b.y - a.y))
+                            dir = b.x >= a.x ? "right" : "left"
+                        else
+                            dir = b.y >= a.y ? "down" : "up"
+                        ws.edit(() => {
+                            const view = ws.activeSheet.addView("section", {
+                                position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
+                                scale: ws.selectedView.scale,
+                                orientation: ws.selectedView.orientation,
+                                parentViewId: ws.selectedView.id,
+                                projectDirection: dir
+                            })
+                            ws.projectOnto(view)
+                            ws.selectedView = view
+                        })
+                        ws.finishPlace("Section view placed")
+                    } else if (ws.detailDragging && ws.selectedView) {
+                        const a = ws.paperToMm(ws.detailStartX, ws.detailStartY)
+                        const b = ws.paperToMm(m.x, m.y)
+                        ws.edit(() => {
+                            const view = ws.activeSheet.addView("detail", {
+                                position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
+                                scale: ws.selectedView.scale * 2,
+                                orientation: ws.selectedView.orientation,
+                                parentViewId: ws.selectedView.id,
+                                detailRadius: Math.max(5, Math.hypot(b.x - a.x, b.y - a.y)),
+                                detailCenter: Qt.point(0, 0)
+                            })
+                            ws.projectOnto(view)
+                            ws.selectedView = view
+                        })
+                        ws.finishPlace("Detail view placed")
+                    }
+                }
+            }
+        }
+        }
+
+        // Middle-drag and wheel sit above the sheet. Left clicks fall through to the views
+        // and to the paper, so this area does not rebuild the sheet and does not eat picks.
+        MouseArea {
+            id: panZoom
+            anchors.fill: parent
+            z: 30
+            acceptedButtons: Qt.MiddleButton | Qt.RightButton
+            property real lastX: 0
+            property real lastY: 0
+            property bool panning: false
+            onPressed: (m) => {
+                panning = true
+                lastX = m.x
+                lastY = m.y
+            }
+            onPositionChanged: (m) => {
+                if (!panning) return
+                ws.sheetPanX += m.x - lastX
+                ws.sheetPanY += m.y - lastY
+                lastX = m.x
+                lastY = m.y
+            }
+            onReleased: panning = false
+            onWheel: (w) => ws.zoomAt(w.angleDelta.y > 0 ? 1.12 : 1 / 1.12, w.x, w.y)
+        }
+
+        ToolButton {
+            text: "Fit"
+            z: 40
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 8
+            onClicked: ws.fitSheet()
+        }
+
     }
 
-    function fitSheet() {
-        sheetZoom = 1
-        sheetPanX = 0
-        sheetPanY = 0
+    // Outside the clipped sheet, so the panel and its dropdown stay on screen.
+    Rectangle {
+        id: inspector
+        visible: ws.selectedView !== null || ws.selectedNoteId !== ""
+        width: 236
+        height: inspectorCol.implicitHeight + 20
+        x: Math.max(8, parent.width - width - 12)
+        y: 8
+        color: "#2c3136"
+        border.color: "#1b1f23"
+        radius: 6
+        z: 60
+
+        // Eats presses on the panel so closing it cannot reach the sheet.
+        MouseArea {
+            anchors.fill: parent
+            z: 0
+            onPressed: (m) => { m.accepted = true }
+        }
+
+        ColumnLayout {
+            id: inspectorCol
+            z: 1
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 10
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: ws.selectedView ? ws.selectedView.type : "Note"
+                    color: "#f2f4f6"
+                    font.bold: true
+                    font.pixelSize: 13
+                    font.capitalization: Font.Capitalize
+                }
+                Item { Layout.fillWidth: true }
+                MouseArea {
+                    implicitWidth: 22
+                    implicitHeight: 22
+                    Layout.preferredWidth: 22
+                    Layout.preferredHeight: 22
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: (m) => { m.accepted = true; ws.dismissInspector() }
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: "Close"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "×"
+                        color: parent.containsMouse ? "#ffffff" : "#d0d4d8"
+                        font.pixelSize: 16
+                    }
+                }
+            }
+
+            Label {
+                text: "Text"
+                color: "#b7bec6"
+                font.pixelSize: 11
+                visible: !ws.selectedView && ws.selectedNoteId !== ""
+            }
+            TextField {
+                id: noteField
+                Layout.fillWidth: true
+                visible: !ws.selectedView && ws.selectedNoteId !== ""
+                selectByMouse: true
+                placeholderText: "Note"
+                onAccepted: {
+                    const id = ws.selectedNoteId
+                    if (!id || text === ws.noteTextOf(id)) return
+                    ws.editingNoteId = ""
+                    ws.editingDraft = text
+                    ws.edit(() => ws.activeSheet.updateAnnotation(id, { text: text }))
+                }
+                Keys.onEscapePressed: (e) => { ws.cancelNoteEdit(); e.accepted = true }
+            }
+
+            Label { text: "Orientation"; color: "#b7bec6"; font.pixelSize: 11; visible: !!ws.selectedView }
+            ComboBox {
+                id: orientBox
+                Layout.fillWidth: true
+                implicitHeight: 30
+                visible: !!ws.selectedView
+                model: ws.orientationLabels
+                currentIndex: ws.orientationIndex(ws.selectedView ? ws.selectedView.orientation : "front")
+                onActivated: (i) => {
+                    const view = ws.selectedView
+                    const id = ws.orientationIds[i]
+                    const same = view && (view.orientation === id
+                        || ((view.orientation === "isometric" || view.orientation === "home") && id === "isoBackTopRight"))
+                    if (!view || !id || same) return
+                    ws.edit(() => { view.orientation = id })
+                    ws.projectOnto(view)
+                }
+                Component.onCompleted: ws.pinComboPopup(orientBox)
+            }
+
+            Label { text: "Display"; color: "#b7bec6"; font.pixelSize: 11; visible: !!ws.selectedView }
+            ComboBox {
+                id: styleBox
+                Layout.fillWidth: true
+                implicitHeight: 30
+                visible: !!ws.selectedView
+                model: ["Wireframe", "Rendered"]
+                currentIndex: ws.selectedView && ws.selectedView.displayStyle === "rendered" ? 1 : 0
+                onActivated: (i) => {
+                    const view = ws.selectedView
+                    const style = i === 1 ? "rendered" : "wireframe"
+                    if (!view || view.displayStyle === style) return
+                    ws.edit(() => { view.displayStyle = style })
+                    ws.projectOnto(view)
+                }
+                Component.onCompleted: ws.pinComboPopup(styleBox)
+            }
+
+            Label { text: "Scale"; color: "#b7bec6"; font.pixelSize: 11; visible: !!ws.selectedView }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !!ws.selectedView
+                spacing: 6
+                Button {
+                    text: "−"
+                    implicitWidth: 32
+                    implicitHeight: 30
+                    onClicked: ws.stepScale(-1)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: ws.selectedView ? ws.drawingScaleLabel(ws.selectedView.scale) : "1:1"
+                    color: "#f2f4f6"
+                    font.pixelSize: 13
+                }
+                Button {
+                    text: "+"
+                    implicitWidth: 32
+                    implicitHeight: 30
+                    onClicked: ws.stepScale(1)
+                }
+            }
+
+            CheckBox {
+                id: hiddenBox
+                Layout.fillWidth: true
+                visible: !!ws.selectedView
+                enabled: !ws.selectedView || ws.selectedView.displayStyle !== "rendered"
+                text: "Hidden lines"
+                spacing: 8
+                checked: ws.selectedView ? ws.selectedView.showHiddenLines : false
+                indicator: Rectangle {
+                    implicitWidth: 16
+                    implicitHeight: 16
+                    x: hiddenBox.leftPadding
+                    y: hiddenBox.height / 2 - height / 2
+                    radius: 2
+                    border.width: 1
+                    border.color: "#d0d4d8"
+                    color: hiddenBox.checked ? Theme.accent : "transparent"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✓"
+                        color: "white"
+                        font.pixelSize: 11
+                        visible: hiddenBox.checked
+                    }
+                }
+                contentItem: Text {
+                    text: hiddenBox.text
+                    color: "#f2f4f6"
+                    font.pixelSize: 12
+                    leftPadding: hiddenBox.indicator.width + hiddenBox.spacing
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onToggled: {
+                    const view = ws.selectedView
+                    if (!view || view.showHiddenLines === checked) return
+                    ws.edit(() => { view.showHiddenLines = checked })
+                    ws.projectOnto(view)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !!ws.selectedView
+                spacing: 6
+                Button {
+                    text: "Regenerate"
+                    Layout.fillWidth: true
+                    implicitHeight: 30
+                    onClicked: {
+                        const view = ws.selectedView
+                        if (!view) return
+                        ws.edit(() => { ws.projectOnto(view) })
+                    }
+                }
+                Button {
+                    text: "Delete"
+                    implicitHeight: 30
+                    onClicked: {
+                        const view = ws.selectedView
+                        if (!view || !ws.activeSheet) return
+                        ws.edit(() => { ws.activeSheet.removeView(view.id) })
+                        ws.selectedView = null
+                    }
+                }
+            }
+        }
     }
+
+    onSelectedNoteIdChanged: if (noteField) noteField.text = noteTextOf(selectedNoteId)
+    onSelectedViewChanged: if (selectedView) { if (editingNoteId) commitNoteEdit(); selectedNoteId = "" }
+
+    Keys.onPressed: (e) => {
+        if (e.key === Qt.Key_Escape) {
+            if (editingNoteId) cancelNoteEdit()
+            else cancelPlace()
+            e.accepted = true
+        }
+        else if (e.key === Qt.Key_F && !(e.modifiers & Qt.ControlModifier)) { fitSheet(); e.accepted = true }
+    }
+    Component.onCompleted: forceActiveFocus()
 
     FileDialog {
         id: exportDialog
@@ -307,619 +1206,6 @@ Item {
             const path = fissionApp.toLocalPath(selectedFile.toString())
             const id = fissionApp.drawingManager.addImage(activeSheet, path, Qt.point(30, 30), 40)
             fissionApp.showMessage(id ? "Image placed" : (fissionApp.drawingManager.lastError || "Could not place image"))
-        }
-    }
-
-    Keys.onPressed: (e) => {
-        if (e.key === Qt.Key_Escape) { cancelPlace(); e.accepted = true }
-        else if (e.key === Qt.Key_F && !(e.modifiers & Qt.ControlModifier)) { fitSheet(); e.accepted = true }
-    }
-    Component.onCompleted: forceActiveFocus()
-
-    RowLayout {
-        anchors.fill: parent
-        spacing: 0
-
-        // -------- Browser --------
-        Rectangle {
-            Layout.preferredWidth: 200
-            Layout.fillHeight: true
-            color: Theme.panel
-            border.color: Theme.border
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
-                Text { text: "DRAWING"; font.pixelSize: 10; font.bold: true; color: Theme.textDim }
-                Text {
-                    text: drawingDoc ? drawingDoc.name : "—"
-                    font.pixelSize: 13; font.bold: true; color: Theme.text
-                    elide: Text.ElideRight; Layout.fillWidth: true
-                }
-                Text {
-                    text: drawingDoc ? (drawingDoc.standard + " · " + drawingDoc.projectionAngle + "-angle") : ""
-                    font.pixelSize: 10; color: Theme.textDim
-                }
-                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
-
-                Text { text: "Sheets"; font.pixelSize: 10; font.bold: true; color: Theme.textDim }
-                Repeater {
-                    model: drawingDoc ? drawingDoc.sheetCount : 0
-                    delegate: Rectangle {
-                        required property int index
-                        Layout.fillWidth: true
-                        height: 22
-                        radius: 3
-                        color: index === drawingDoc.activeSheetIndex ? Theme.accentLight : "transparent"
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.left: parent.left
-                            anchors.leftMargin: 6
-                            text: {
-                                const s = drawingDoc.sheet(index)
-                                return (s ? s.name : "") + (s ? "  (" + s.size + ")" : "")
-                            }
-                            color: Theme.text; font.pixelSize: 11
-                        }
-                        MouseArea { anchors.fill: parent; onClicked: drawingDoc.activeSheetIndex = index }
-                    }
-                }
-                Button {
-                    text: "+ Sheet"
-                    flat: true
-                    onClicked: {
-                        if (!drawingDoc) return
-                        drawingDoc.addSheet("Sheet" + (drawingDoc.sheetCount + 1), "A3", "landscape")
-                        drawingDoc.activeSheetIndex = drawingDoc.sheetCount - 1
-                    }
-                }
-
-                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
-                Text { text: "Views"; font.pixelSize: 10; font.bold: true; color: Theme.textDim }
-                Flickable {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    contentHeight: viewCol.height
-                    clip: true
-                    Column {
-                        id: viewCol
-                        width: parent.width
-                        spacing: 2
-                        Repeater {
-                            model: activeSheet ? activeSheet.viewCount : 0
-                            delegate: Rectangle {
-                                required property int index
-                                width: viewCol.width
-                                height: 24
-                                radius: 3
-                                color: {
-                                    const v = activeSheet.view(index)
-                                    return (selectedView && v && selectedView.id === v.id) ? Theme.accentLight : "transparent"
-                                }
-                                Text {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 6
-                                    verticalAlignment: Text.AlignVCenter
-                                    text: {
-                                        const v = activeSheet.view(index)
-                                        return v ? (v.name + " · " + v.orientation) : ""
-                                    }
-                                    color: Theme.text; font.pixelSize: 11; elide: Text.ElideRight
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: {
-                                        selectedView = activeSheet.view(index)
-                                        if (selectedView && app.selection)
-                                            app.selection.select({ kind: "drawingView", id: selectedView.id }, false)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Button {
-                    text: drawingOutOfDate ? "Update from Design ★" : "Update from Design"
-                    flat: true
-                    enabled: !!designDoc()
-                    onClicked: updateFromDesign()
-                }
-                Button { text: "Regenerate"; flat: true; onClicked: regenerateAll() }
-                Button { text: "Fit sheet (F)"; flat: true; onClicked: fitSheet() }
-                Text {
-                    visible: drawingOutOfDate
-                    text: "Out of date with design"
-                    color: Theme.error
-                    font.pixelSize: 11
-                    font.bold: true
-                }
-            }
-        }
-
-        // -------- Sheet viewport --------
-        Item {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            clip: true
-
-            Rectangle { anchors.fill: parent; color: "#d4d8dc" }
-
-            // Orientation bar while placing base view
-            Rectangle {
-                id: orientBar
-                visible: activeTool === "baseView"
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                anchors.topMargin: 10
-                width: orientRow.width + 16
-                height: 36
-                radius: 6
-                color: Theme.panel
-                border.color: Theme.border
-                z: 30
-                Row {
-                    id: orientRow
-                    anchors.centerIn: parent
-                    spacing: 4
-                    Repeater {
-                        model: drawingWS.orientations
-                        delegate: Button {
-                            text: modelData.label
-                            flat: true
-                            highlighted: placeOrientation === modelData.id
-                            onClicked: placeOrientation = modelData.id
-                            implicitHeight: 26
-                            implicitWidth: 48
-                        }
-                    }
-                }
-            }
-
-            // View inspector
-            Rectangle {
-                id: inspector
-                visible: !!selectedView && activeTool === "select"
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: 10
-                width: 200
-                height: inspCol.implicitHeight + 16
-                radius: 6
-                color: Theme.panel
-                border.color: Theme.border
-                z: 30
-                ColumnLayout {
-                    id: inspCol
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
-                    Text {
-                        text: selectedView ? selectedView.name : ""
-                        font.bold: true; font.pixelSize: 12; color: Theme.text
-                        Layout.fillWidth: true; elide: Text.ElideRight
-                    }
-                    Text {
-                        text: selectedView ? (selectedView.type + " · " + selectedView.orientation) : ""
-                        font.pixelSize: 10; color: Theme.textDim
-                    }
-                    RowLayout {
-                        Label { text: "Scale"; color: Theme.text; Layout.preferredWidth: 48 }
-                        SpinBox {
-                            from: 1; to: 1000
-                            value: selectedView ? Math.round(selectedView.scale * 100) : 100
-                            editable: true
-                            textFromValue: (v) => (v / 100).toFixed(2)
-                            valueFromText: (t) => Math.round(parseFloat(t) * 100)
-                            onValueModified: if (selectedView) selectedView.scale = value / 100
-                            Layout.fillWidth: true
-                        }
-                    }
-                    CheckBox {
-                        text: "Hidden lines"
-                        checked: selectedView ? selectedView.showHiddenLines : false
-                        onToggled: if (selectedView) selectedView.showHiddenLines = checked
-                    }
-                    Button {
-                        text: "Shift+drag to project"
-                        flat: true
-                        Layout.fillWidth: true
-                        onClicked: beginProjectMode()
-                    }
-                    Button {
-                        text: "Regenerate view"
-                        flat: true
-                        Layout.fillWidth: true
-                        onClicked: if (selectedView) projectView(selectedView)
-                    }
-                }
-            }
-
-            // HUD
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: 12
-                z: 30
-                color: Theme.header
-                font.pixelSize: 12
-                font.bold: true
-                style: Text.Outline
-                styleColor: "#ffffff"
-                text: {
-                    if (activeTool === "baseView")
-                        return "Click sheet to place " + placeOrientation + " base view · Esc cancel"
-                    if (activeTool === "projectedView")
-                        return "Shift+drag from parent view toward the projection · Esc cancel"
-                    if (activeTool === "sectionView")
-                        return "Click to place section view from selected parent"
-                    if (activeTool === "detailView")
-                        return "Click to place detail view from selected parent"
-                    if (activeTool === "dimension")
-                        return "Drag on the sheet to place a dimension"
-                    if (activeTool === "text")
-                        return "Click to place a note"
-                    if (activeTool === "centerMark")
-                        return "Click to place a center mark"
-                    return "Wheel zoom · Mid-drag pan · Shift+drag view to project · F fit"
-                }
-            }
-
-            // Transformed paper host (pan + zoom around view center)
-            Item {
-                id: paperHost
-                width: parent.width
-                height: parent.height
-                x: sheetPanX
-                y: sheetPanY
-                scale: sheetZoom
-                transformOrigin: Item.Center
-
-                Rectangle {
-                    id: paper
-                    anchors.centerIn: parent
-                    width: (activeSheet ? activeSheet.width : 420) * fitScale
-                    height: (activeSheet ? activeSheet.height : 297) * fitScale
-                    readonly property real fitScale: {
-                        if (!activeSheet) return 1
-                        const sx = (paperHost.width - 48) / Math.max(1, activeSheet.width)
-                        const sy = (paperHost.height - 48) / Math.max(1, activeSheet.height)
-                        return Math.min(sx, sy)
-                    }
-                    color: "white"
-                    border.color: "#9aa0a6"
-                    border.width: 1
-                    layer.enabled: true
-                    layer.smooth: true
-
-                    // Soft sheet shadow
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: -1
-                        z: -1
-                        color: "transparent"
-                        border.color: "#00000022"
-                        border.width: 6
-                        radius: 1
-                    }
-
-                    // Light border frame (drawing format)
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: 10 * paper.fitScale
-                        color: "transparent"
-                        border.color: "#333"
-                        border.width: 1
-                    }
-
-                    Repeater {
-                        model: activeSheet ? activeSheet.viewCount : 0
-                        delegate: DrawingViewItem {
-                            required property int index
-                            view: activeSheet ? activeSheet.view(index) : null
-                            selection: app ? app.selection : null
-                            paperScale: paper.fitScale
-                            x: view ? view.position.x * paper.fitScale : 0
-                            y: view ? view.position.y * paper.fitScale : 0
-                            selected: selectedView && view && selectedView.id === view.id
-                            interactive: activeTool === "select" || activeTool === "projectedView"
-                            onClicked: selectedView = view
-                            onDragFinished: (nx, ny) => {
-                                if (view) view.position = Qt.point(nx / paper.fitScale, ny / paper.fitScale)
-                            }
-                            onProjectDrag: (dir) => placeProjected(view, dir)
-                        }
-                    }
-
-                    // Annotations
-                    Repeater {
-                        model: activeSheet ? activeSheet.annotationCount : 0
-                        delegate: Item {
-                            required property int index
-                            readonly property var ann: activeSheet ? activeSheet.annotation(index) : ({})
-                            x: (ann.x || 0) * paper.fitScale
-                            y: (ann.y || 0) * paper.fitScale
-                            Canvas {
-                                width: 240; height: 48
-                                anchors.centerIn: parent
-                                visible: ann.kind === "dimension" || ann.kind === "leader"
-                                onPaint: {
-                                    const ctx = getContext("2d")
-                                    ctx.reset()
-                                    ctx.strokeStyle = "#222"
-                                    ctx.lineWidth = 1
-                                    const x2 = ((ann.x2 || ann.x) - ann.x) * paper.fitScale
-                                    const y2 = ((ann.y2 || ann.y) - ann.y) * paper.fitScale
-                                    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(x2, y2); ctx.stroke()
-                                    // arrows
-                                    const len = Math.hypot(x2, y2) || 1
-                                    const ux = x2 / len, uy = y2 / len
-                                    function arrow(atx, aty, sx, sy) {
-                                        ctx.beginPath()
-                                        ctx.moveTo(atx, aty)
-                                        ctx.lineTo(atx - sx * 7 + sy * 3, aty - sy * 7 - sx * 3)
-                                        ctx.lineTo(atx - sx * 7 - sy * 3, aty - sy * 7 + sx * 3)
-                                        ctx.closePath(); ctx.fillStyle = "#222"; ctx.fill()
-                                    }
-                                    arrow(0, 0, -ux, -uy)
-                                    arrow(x2, y2, ux, uy)
-                                }
-                            }
-                            Text {
-                                visible: ann.kind === "text" || ann.kind === "holeNote" || ann.kind === "dimension"
-                                text: ann.text || ""
-                                font.pixelSize: Math.max(9, (ann.fontSize || 3.5) * paper.fitScale)
-                                color: "#222"
-                            }
-                            Image {
-                                visible: ann.kind === "image"
-                                source: ann.path ? ("file:///" + ann.path.replace(/\\/g, "/")) : ""
-                                width: (ann.width || 40) * paper.fitScale
-                                height: (ann.height || 30) * paper.fitScale
-                                fillMode: Image.PreserveAspectFit
-                            }
-                            Canvas {
-                                visible: ann.kind === "centerMark"
-                                width: 24; height: 24
-                                anchors.centerIn: parent
-                                onPaint: {
-                                    const ctx = getContext("2d")
-                                    ctx.reset()
-                                    ctx.strokeStyle = "#333"
-                                    ctx.beginPath()
-                                    ctx.moveTo(12, 2); ctx.lineTo(12, 22)
-                                    ctx.moveTo(2, 12); ctx.lineTo(22, 12)
-                                    ctx.stroke()
-                                    ctx.beginPath(); ctx.arc(12, 12, 5, 0, Math.PI * 2); ctx.stroke()
-                                }
-                            }
-                        }
-                    }
-
-                    Repeater {
-                        model: activeSheet ? activeSheet.tableCount : 0
-                        delegate: Rectangle {
-                            required property int index
-                            readonly property var tbl: activeSheet ? activeSheet.table(index) : ({})
-                            x: (tbl.x || 0) * paper.fitScale
-                            y: (tbl.y || 0) * paper.fitScale
-                            width: {
-                                const cols = tbl.colWidths || [20, 20, 40]
-                                let w = 0
-                                for (let i = 0; i < cols.length; ++i) w += cols[i]
-                                return w * paper.fitScale
-                            }
-                            height: ((tbl.rows ? tbl.rows.length : 1) * 5 + 4) * paper.fitScale
-                            color: "#fafafa"
-                            border.color: "#666"
-                            Column {
-                                anchors.fill: parent
-                                anchors.margins: 1
-                                Text {
-                                    text: tbl.title || "Table"
-                                    font.pixelSize: Math.max(8, 2.5 * paper.fitScale)
-                                    font.bold: true
-                                }
-                                Repeater {
-                                    model: tbl.rows || []
-                                    delegate: Row {
-                                        required property var modelData
-                                        spacing: 0
-                                        Repeater {
-                                            model: modelData
-                                            delegate: Rectangle {
-                                                required property var modelData
-                                                required property int index
-                                                width: ((tbl.colWidths && tbl.colWidths[index]) || 20) * paper.fitScale
-                                                height: 5 * paper.fitScale
-                                                border.color: "#888"
-                                                border.width: 0.5
-                                                color: "white"
-                                                Text {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 1
-                                                    text: String(modelData)
-                                                    font.pixelSize: Math.max(7, 2.2 * paper.fitScale)
-                                                    elide: Text.ElideRight
-                                                    verticalAlignment: Text.AlignVCenter
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Ghost for base view placement
-                    Rectangle {
-                        visible: ghostVisible && activeTool === "baseView"
-                        x: ghostX - width / 2
-                        y: ghostY - height / 2
-                        width: 90 * paper.fitScale
-                        height: 70 * paper.fitScale
-                        color: "#2d7ff928"
-                        border.color: "#2d7ff9"
-                        border.width: 1.5
-                        radius: 2
-                        z: 40
-                        Text {
-                            anchors.centerIn: parent
-                            text: placeOrientation
-                            color: "#2d7ff9"
-                            font.bold: true
-                            font.pixelSize: 12
-                        }
-                    }
-
-                    // Dimension rubber band
-                    Canvas {
-                        id: dimPreview
-                        anchors.fill: parent
-                        visible: dimDragging
-                        z: 45
-                        property real x2: 0
-                        property real y2: 0
-                        onPaint: {
-                            if (!dimDragging) return
-                            const ctx = getContext("2d")
-                            ctx.reset()
-                            ctx.strokeStyle = "#2d7ff9"
-                            ctx.setLineDash([4, 3])
-                            ctx.beginPath()
-                            ctx.moveTo(dimStartX, dimStartY)
-                            ctx.lineTo(x2, y2)
-                            ctx.stroke()
-                        }
-                    }
-
-                    // Title block
-                    Rectangle {
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.margins: 14 * paper.fitScale
-                        width: 190
-                        height: 70
-                        color: "#f7f7f7"
-                        border.color: "#444"
-                        Column {
-                            anchors.fill: parent
-                            anchors.margins: 5
-                            spacing: 1
-                            Text {
-                                text: activeSheet ? (activeSheet.partName || activeSheet.title || activeSheet.name) : "Sheet"
-                                font.pixelSize: 11; font.bold: true; color: "#222"
-                                width: parent.width; elide: Text.ElideRight
-                            }
-                            Text {
-                                text: (activeSheet && activeSheet.drawnBy ? "By " + activeSheet.drawnBy + "  " : "")
-                                      + (activeSheet ? "Rev " + activeSheet.revision : "")
-                                font.pixelSize: 9; color: "#555"
-                            }
-                            Text {
-                                text: (activeSheet ? activeSheet.date : "")
-                                      + (activeSheet && activeSheet.material ? " · " + activeSheet.material : "")
-                                font.pixelSize: 9; color: "#555"
-                            }
-                            Text {
-                                text: (drawingDoc ? drawingDoc.standard : "ISO")
-                                      + " · " + (activeSheet ? activeSheet.size : "A3")
-                                      + " · " + (drawingDoc ? drawingDoc.projectionAngle + "-angle" : "")
-                                font.pixelSize: 8; color: "#888"
-                            }
-                        }
-                    }
-
-                    MouseArea {
-                        id: paperMouse
-                        anchors.fill: parent
-                        acceptedButtons: Qt.LeftButton
-                        hoverEnabled: true
-                        propagateComposedEvents: true
-                        z: 1
-                        cursorShape: (activeTool === "baseView" || activeTool === "dimension"
-                                      || activeTool === "text" || activeTool === "centerMark"
-                                      || activeTool === "sectionView" || activeTool === "detailView")
-                                     ? Qt.CrossCursor : Qt.ArrowCursor
-
-                        onPositionChanged: (m) => {
-                            if (activeTool === "baseView") {
-                                ghostX = m.x; ghostY = m.y; ghostVisible = true
-                            }
-                            if (dimDragging) {
-                                dimPreview.x2 = m.x; dimPreview.y2 = m.y; dimPreview.requestPaint()
-                            }
-                        }
-                        onPressed: (m) => {
-                            drawingWS.forceActiveFocus()
-                            if (activeTool === "dimension") {
-                                dimStartX = m.x; dimStartY = m.y; dimDragging = true
-                                dimPreview.x2 = m.x; dimPreview.y2 = m.y; dimPreview.requestPaint()
-                                m.accepted = true
-                                return
-                            }
-                            if (activeTool === "baseView") {
-                                const p = paperToMm(m.x, m.y)
-                                // Center the view on the click
-                                placeBaseAt(p.x - 40, p.y - 30)
-                                m.accepted = true
-                                return
-                            }
-                            if (activeTool === "sectionView" || activeTool === "detailView") {
-                                const p = paperToMm(m.x, m.y)
-                                placeSectionOrDetail(activeTool === "sectionView" ? "section" : "detail", p.x, p.y)
-                                m.accepted = true
-                                return
-                            }
-                            if (activeTool === "text") {
-                                addTextAt(m.x, m.y, "Note")
-                                cancelPlace()
-                                m.accepted = true
-                                return
-                            }
-                            if (activeTool === "centerMark") {
-                                const p = paperToMm(m.x, m.y)
-                                activeSheet.addAnnotation({ kind: "centerMark", x: p.x, y: p.y, radius: 3 })
-                                cancelPlace()
-                                m.accepted = true
-                                return
-                            }
-                            // Deselect when clicking empty paper
-                            selectedView = null
-                            m.accepted = false
-                        }
-                        onReleased: (m) => {
-                            if (dimDragging && activeTool === "dimension") {
-                                addDimension(dimStartX, dimStartY, m.x, m.y)
-                                dimDragging = false
-                                cancelPlace()
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Pan / zoom over the whole sheet area (middle button or space+left)
-            MouseArea {
-                id: navMouse
-                anchors.fill: parent
-                acceptedButtons: Qt.MiddleButton | Qt.RightButton
-                propagateComposedEvents: true
-                property real lastX: 0
-                property real lastY: 0
-                z: 5
-                onPressed: (m) => { lastX = m.x; lastY = m.y }
-                onPositionChanged: (m) => {
-                    if (!pressed) return
-                    sheetPanX += m.x - lastX
-                    sheetPanY += m.y - lastY
-                    lastX = m.x; lastY = m.y
-                }
-                onWheel: (w) => {
-                    const f = w.angleDelta.y > 0 ? 1.12 : 1 / 1.12
-                    zoomAt(f, w.x, w.y)
-                }
-            }
         }
     }
 }

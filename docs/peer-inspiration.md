@@ -72,6 +72,6 @@ Prioritised for Fission’s existing C++/Qt/OCCT stack.
 - [ ] Oracle suite: 10 public STEP parts, volume/CoM vs FreeCAD or analytic  
 - [ ] Windows MSI + `winget` manifest  
 - [x] Help → Report Issue (pre-filled body: version, OS, last error) — top bar + File / Help / UTILITIES *(1.13.32)*  
-- [ ] README “honest status” line + link to this file  
+- [x] README “honest status” line + link to this file *(added in 1.13.34 docs; the status line now names 1.13.35)*  
 
 Reviewed against SolidCraft public README / capabilities / architecture / MCP docs (2026-10). Re-check their CONTRIBUTING/AGENTS before any contribution *to* SolidCraft (separate project).

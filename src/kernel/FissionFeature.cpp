@@ -576,7 +576,7 @@ bool FissionFeature::applyFusionSnapshot(RebuildContext &ctx) {
         const QString wanted = name;
         for (int k = 2; taken.contains(name); ++k) name = QString("%1 %2").arg(wanted).arg(k);
         taken.insert(name);
-        ctx.bodies.append({name, s, i < before.size() ? before[i].sourceFeature : id()});
+        ctx.bodies.append({name, s, id()});
     };
     for (int s = 0; s < solids.size(); ++s) add(solids[s], names[s]);
     BRep_Builder bb;

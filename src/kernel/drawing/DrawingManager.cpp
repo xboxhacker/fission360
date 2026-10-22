@@ -11,6 +11,8 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QImage>
+#include <QByteArray>
+#include <QJsonObject>
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
@@ -92,6 +94,34 @@ DrawingDocument *DrawingManager::drawingById(const QString &id) const
     return nullptr;
 }
 
+QJsonArray DrawingManager::toJsonForDesign(const QString &designId) const
+{
+    QJsonArray out;
+    for (DrawingDocument *d : m_drawings) {
+        if (!d) continue;
+        if (!designId.isEmpty() && d->referencedDesignId() != designId) continue;
+        out.append(d->toJson());
+    }
+    return out;
+}
+
+void DrawingManager::restoreFromJson(const QJsonArray &drawings)
+{
+    bool changed = false;
+    for (const QJsonValue &v : drawings) {
+        const QJsonObject obj = v.toObject();
+        const QString id = obj.value(QStringLiteral("id")).toString();
+        if (id.isEmpty()) continue;
+        if (drawingById(id))
+            removeDrawing(id);
+        DrawingDocument *doc = DrawingDocument::fromJson(obj, this);
+        if (!doc) continue;
+        m_drawings.append(doc);
+        changed = true;
+    }
+    if (changed) emit drawingsChanged();
+}
+
 bool DrawingManager::removeDrawing(const QString &id)
 {
     for (int i = 0; i < m_drawings.size(); ++i) {
@@ -113,6 +143,8 @@ bool DrawingManager::projectView(DrawingView *view, FissionDocument *design, Dra
 
     QString orient = view->orientation();
     const QString type = view->type();
+    const bool rendered = view->displayStyle() == QLatin1String("rendered");
+    const bool hidden = view->showHiddenLines() && !rendered;
     DrawingProjector::Result result;
 
     if (type == QLatin1String("projected") && !view->parentViewId().isEmpty() && drawingDoc) {
@@ -128,14 +160,14 @@ bool DrawingManager::projectView(DrawingView *view, FissionDocument *design, Dra
                                                            drawingDoc->projectionAngle());
             view->setOrientation(orient);
         }
-        result = DrawingProjector::project(design, orient, view->showHiddenLines());
+        result = DrawingProjector::project(design, orient, hidden);
     } else if (type == QLatin1String("section")) {
         result = DrawingProjector::projectSection(design, orient,
                                                   view->projectDirection().isEmpty() ? QStringLiteral("right")
                                                                                     : view->projectDirection());
     } else if (type == QLatin1String("detail")) {
         // Project the parent orientation (or this view's), then clip to the detail circle in view space.
-        result = DrawingProjector::project(design, orient, view->showHiddenLines());
+        result = DrawingProjector::project(design, orient, hidden);
         if (result.ok && view->detailRadius() > 0) {
             const QPointF c = view->detailCenter();
             const double r = view->detailRadius();
@@ -157,9 +189,9 @@ bool DrawingManager::projectView(DrawingView *view, FissionDocument *design, Dra
     } else if (type == QLatin1String("auxiliary")) {
         result = DrawingProjector::project(design,
                                            orient.isEmpty() ? QStringLiteral("isometric") : orient,
-                                           view->showHiddenLines());
+                                           hidden);
     } else {
-        result = DrawingProjector::project(design, orient, view->showHiddenLines());
+        result = DrawingProjector::project(design, orient, hidden);
     }
 
     if (!result.ok) {
@@ -167,6 +199,12 @@ bool DrawingManager::projectView(DrawingView *view, FissionDocument *design, Dra
         return false;
     }
     view->setCurves(result.visible, result.hidden, result.section, result.width, result.height);
+    if (rendered) {
+        const QByteArray png = DrawingProjector::renderShadedPng(design, orient, 420);
+        view->setRenderPng(QString::fromLatin1(png.toBase64()));
+    } else if (!view->renderPng().isEmpty()) {
+        view->setRenderPng(QString());
+    }
     return true;
 }
 

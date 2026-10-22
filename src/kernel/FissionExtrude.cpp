@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "FissionExtrude.h"
+#include "FissionSolidTools.h"
 #include "GeomUtils.h"
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepTools.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pln.hxx>
@@ -30,11 +32,58 @@ static TopoDS_Shape prism(const TopoDS_Shape &profile, const gp_Dir &dir, double
     return mk.IsDone() ? mk.Shape() : TopoDS_Shape();
 }
 
+namespace {
+gp_Dir faceOutward(const TopoDS_Face &f) {
+    BRepAdaptor_Surface s(f);
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(f, u0, u1, v0, v1);
+    gp_Pnt p;
+    gp_Vec du, dv;
+    s.D1((u0 + u1) / 2, (v0 + v1) / 2, p, du, dv);
+    const gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1e-12) return gp_Dir(0, 0, 1);
+    gp_Dir d(n);
+    if (f.Orientation() == TopAbs_REVERSED) d.Reverse();
+    return d;
+}
+}
+
 bool FissionExtrude::compute(RebuildContext &ctx) {
     QString err;
     TopoDS_Shape profile;
     gp_Ax3 plane;
     const QVariantList profiles = list("profiles");
+    if (RebuildContext::isFaceProfileList(profiles)) {
+        int body = -1;
+        QList<TopoDS_Face> faces;
+        bool curved = false;
+        for (const QVariant &ref : profiles) {
+            int b = -1;
+            TopoDS_Face face;
+            if (!ctx.resolveFace(ref, b, face, err)) return fail(err);
+            if (body >= 0 && b != body) return fail("Faces pulled together must be on one body");
+            body = b;
+            if (BRepAdaptor_Surface(face).GetType() != GeomAbs_Plane) curved = true;
+            faces.append(face);
+        }
+        if (curved) {
+            double d1 = 0, taper = 0;
+            if (!number(ctx, "distance", d1) || !number(ctx, "taper", taper)) return false;
+            if (std::fabs(taper) > 1e-9) return fail("Taper does not apply when pulling a round face");
+            if (str("extent", "distance") != QLatin1String("distance"))
+                return fail("Pull a round face with a distance");
+            const double signedDist = flag("flip") ? -d1 : d1;
+            setManipulator(GeomUtils::faceCentroid(faces.first()), faceOutward(faces.first()), "distance", signedDist);
+            TopoDS_Shape pulled;
+            if (!offsetFacesOnSolid(ctx.bodies[body].shape, faces, signedDist, pulled, err))
+                return fail(err.isEmpty() ? QStringLiteral("Could not pull this face") : err);
+            if (std::fabs(signedDist) < 1e-9) return true;
+            const QList<TopoDS_Shape> parts = GeomUtils::solids(pulled);
+            if (parts.isEmpty()) return fail("Could not pull this face");
+            ctx.bodies[body].shape = parts.first();
+            return true;
+        }
+    }
     const bool ok = RebuildContext::isFaceProfileList(profiles)
                         ? ctx.resolveFaceProfiles(profiles, profile, plane, err)
                         : ctx.resolveProfiles(str("sketch"), profiles, profile, plane, err);

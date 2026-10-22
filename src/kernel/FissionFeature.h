@@ -23,6 +23,7 @@ struct BodyState {
     QString name;
     TopoDS_Shape shape;
     QString sourceFeature;   // id of the feature that created the body
+    QString editedBy;        // id of the feature that last changed the body
 };
 
 // State threaded through the timeline while it is replayed.

@@ -3,6 +3,13 @@
 #pragma once
 #include "FissionFeature.h"
 #include "FissionTransform.h"
+#include <QList>
+#include <TopoDS_Face.hxx>
+
+// Move `faces` of `solid` by `distance` along their outward normals. A round chamfer is pulled
+// (its size changes, or it comes off) instead of being rejected as a non-flat face.
+bool offsetFacesOnSolid(const TopoDS_Shape &solid, const QList<TopoDS_Face> &faces, double distance,
+                        TopoDS_Shape &out, QString &error);
 
 // MODIFY tools that work on existing bodies. Body inputs are body indices; face inputs are face refs
 // (see RebuildContext). Plane inputs take any plane ref accepted by RebuildContext::resolvePlane.

@@ -115,6 +115,100 @@ Rectangle {
 
     function isSelected(ref) { return (app.selection.count, app.selection.contains(ref)) }
 
+    // Face and edge picks name their body. Sketch curves name their sketch. The viewport selection stays as picked.
+    function browserHit(slot, key) {
+        const sel = app.selection
+        const n = sel.count
+        const items = sel.items
+        for (let i = 0; i < n; ++i) {
+            const it = items[i]
+            if (!it) continue
+            if (slot === "body" && (it.kind === "body" || it.kind === "face" || it.kind === "edge") && it.body === key)
+                return true
+            if (slot === "sketch" && (it.kind === "sketchcurve" || it.kind === "profile") && it.sketch === key)
+                return true
+            if (slot === "construction" && (it.kind === "plane" || it.kind === "axis" || it.kind === "point") && it.id === key)
+                return true
+            if (slot === "origin" && (it.kind === "originplane" || it.kind === "originaxis" || it.kind === "originpoint") && it.id === key)
+                return true
+        }
+        return false
+    }
+
+    property var sketchFeatures: []
+    property var constructionFeatures: []
+    function refreshLists() {
+        const d = browser.doc
+        const tl = d ? d.timeline : null
+        const sketches = []
+        const construction = []
+        if (tl) {
+            const marker = tl.marker
+            const n = tl.count
+            for (let i = 0; i < n; ++i) {
+                const f = tl.at(i)
+                if (!f) continue
+                const t = f.type
+                if (t === "Sketch") sketches.push({ index: i, active: i < marker })
+                else if (t.indexOf("Construction") === 0) construction.push({ index: i, active: i < marker })
+            }
+        }
+        sketchFeatures = sketches
+        constructionFeatures = construction
+    }
+    function revealRow(row) {
+        const flick = browserScroll.contentItem
+        if (!flick || !row || !row.visible) return
+        const p = row.mapToItem(flick, 0, 0)
+        if (p.y < 4) flick.contentY = Math.max(0, flick.contentY + p.y - 4)
+        else if (p.y + row.height > flick.height - 4)
+            flick.contentY = flick.contentY + (p.y + row.height - flick.height) + 4
+    }
+    function followSelection() {
+        const sel = browser.app && browser.app.selection
+        if (!sel || sel.count < 1) return
+        const it = sel.items[sel.count - 1]
+        if (!it) return
+        const k = it.kind
+        let folder = null
+        let row = null
+        if (k === "face" || k === "edge" || k === "body") {
+            folder = bodiesFolder
+            row = bodiesRepeater.itemAt(it.body)
+        } else if (k === "sketchcurve" || k === "profile") {
+            folder = sketchesFolder
+            for (let i = 0; i < sketchRepeater.count; ++i) {
+                const r = sketchRepeater.itemAt(i)
+                if (r && r.featureId === it.sketch) { row = r; break }
+            }
+        } else if (k === "plane" || k === "axis" || k === "point") {
+            folder = constructionFolder
+            for (let i = 0; i < constructionRepeater.count; ++i) {
+                const r = constructionRepeater.itemAt(i)
+                if (r && r.featureId === it.id) { row = r; break }
+            }
+        } else if (k === "originplane" || k === "originaxis" || k === "originpoint") {
+            folder = originFolder
+            const ids = ["O", "X", "Y", "Z", "XY", "XZ", "YZ"]
+            const idx = ids.indexOf(it.id)
+            if (idx >= 0) row = originRepeater.itemAt(idx)
+        }
+        if (!folder) return
+        if (!folder.open) folder.open = true
+        Qt.callLater(() => browser.revealRow(row))
+    }
+    onDocChanged: refreshLists()
+    Component.onCompleted: refreshLists()
+    Connections {
+        target: browser.doc ? browser.doc.timeline : null
+        function onCountChanged() { browser.refreshLists() }
+        function onMarkerChanged() { browser.refreshLists() }
+    }
+    Connections {
+        target: browser.app ? browser.app.selection : null
+        function onSelectionChanged() { browser.followSelection() }
+    }
+
     property int linkRev: 0
     Connections {
         target: browser.doc
@@ -122,6 +216,17 @@ Rectangle {
         function onRebuilt() { ++browser.linkRev }
     }
     readonly property var linked: (linkRev, app.linkedRevision, doc ? doc.linkedDesigns() : [])
+    readonly property var drawingLinks: {
+        const d = browser.doc
+        if (!d) return []
+        d.linkedAssets
+        d.contentRevision
+        const out = []
+        const assets = d.linkedAssets
+        for (let i = 0; i < assets.length; ++i)
+            if (assets[i] && assets[i].kind === "drawing") out.push(assets[i])
+        return out
+    }
     function linkFor(featureId) { return linked.find(l => l.featureId === featureId) || null }
 
     ColumnLayout {
@@ -144,6 +249,7 @@ Rectangle {
         }
 
         ScrollView {
+            id: browserScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
@@ -288,12 +394,14 @@ Rectangle {
                 }
 
                 Folder {
+                    id: originFolder
                     title: "Origin"
                     open: false
                     showEye: true
                     eyeOn: Object.keys(browser.app.originVisible).some(k => browser.app.originVisible[k])
                     onEyeToggled: browser.app.setAllOriginVisible(!eyeOn)
                     Repeater {
+                        id: originRepeater
                         // [id, label, ref kind]
                         model: [["O", "O (Origin)", "originpoint"], ["X", "X Axis", "originaxis"], ["Y", "Y Axis", "originaxis"],
                                 ["Z", "Z Axis", "originaxis"], ["XY", "XY Plane", "originplane"], ["XZ", "XZ Plane", "originplane"],
@@ -343,9 +451,30 @@ Rectangle {
                 }
 
                 Folder {
+                    objectName: "drawingsFolder"
+                    title: "Drawings"
+                    glyph: "sheetrule"
+                    visible: browser.drawingLinks.length > 0
+                    count: browser.drawingLinks.length
+                    Repeater {
+                        model: browser.drawingLinks
+                        Row_ {
+                            required property var modelData
+                            glyph: "sheetrule"
+                            glyphColor: modelData.outOfDate ? "#d89a2b" : Theme.accent
+                            label: (modelData.name || "Drawing") + (modelData.outOfDate ? "  (out of date)" : "")
+                            onClicked: browser.app.openDrawing(modelData.id)
+                            onDoubleClicked: browser.app.openDrawing(modelData.id)
+                        }
+                    }
+                }
+
+                Folder {
+                    id: bodiesFolder
                     title: "Bodies"
                     count: browser.doc ? browser.doc.bodies.length : 0
                     Repeater {
+                        id: bodiesRepeater
                         model: browser.doc ? browser.doc.bodies : []
                         Row_ {
                             required property var modelData
@@ -354,7 +483,7 @@ Rectangle {
                             label: modelData.name
                             showEye: true
                             eyeOn: modelData.visible
-                            selected: browser.isSelected({ kind: "body", body: index })
+                            selected: browser.browserHit("body", index)
                             onEyeToggled: modelData.visible = !modelData.visible
                             onClicked: {
                                 const ref = { kind: "body", body: index }
@@ -367,55 +496,61 @@ Rectangle {
                 }
 
                 Folder {
+                    id: sketchesFolder
                     title: "Sketches"
+                    count: browser.sketchFeatures.length
                     Repeater {
-                        model: browser.doc ? browser.doc.timeline : null
+                        id: sketchRepeater
+                        model: browser.sketchFeatures
                         Row_ {
-                            required property var feature
-                            required property string type
-                            required property string name
-                            required property string error
-                            required property bool active
-                            visible: type === "Sketch"
+                            required property var modelData
+                            readonly property int featureIndex: modelData.index
+                            readonly property var feature: browser.doc && browser.doc.timeline ? browser.doc.timeline.at(featureIndex) : null
+                            readonly property bool active: !!modelData.active
+                            property string featureId: feature ? feature.id : ""
                             glyph: "sketch"
                             glyphColor: Theme.sketch
-                            label: name + (active ? "" : "  (rolled back)")
-                            bad: error.length > 0
+                            label: feature ? (feature.name + (active ? "" : "  (rolled back)")) : ""
+                            bad: feature ? feature.error.length > 0 : false
                             showEye: true
-                            eyeOn: feature.visible
-                            selected: browser.app.activeSketchId === feature.id
-                            onEyeToggled: feature.visible = !feature.visible
-                            onDoubleClicked: browser.app.editSketch(feature.id, false)
+                            eyeOn: feature ? feature.visible : true
+                            selected: feature && (browser.app.activeSketchId === feature.id || browser.browserHit("sketch", feature.id))
+                            onEyeToggled: if (feature) feature.visible = !feature.visible
+                            onDoubleClicked: if (feature) browser.app.editSketch(feature.id, false)
                             onContextMenu: (x, y) => featureMenu.openFor(feature, this)
                         }
                     }
                 }
 
                 Folder {
+                    id: constructionFolder
                     title: "Construction"
+                    count: browser.constructionFeatures.length
                     Repeater {
-                        model: browser.doc ? browser.doc.timeline : null
+                        id: constructionRepeater
+                        model: browser.constructionFeatures
                         Row_ {
-                            required property var feature
-                            required property string type
-                            required property string name
-                            required property string error
-                            visible: type.indexOf("Construction") === 0
+                            required property var modelData
+                            readonly property int featureIndex: modelData.index
+                            readonly property var feature: browser.doc && browser.doc.timeline ? browser.doc.timeline.at(featureIndex) : null
+                            readonly property string type: feature ? feature.type : ""
+                            property string featureId: feature ? feature.id : ""
                             glyph: Theme.featureGlyph(type)
                             glyphColor: Theme.construction
-                            label: name
-                            bad: error.length > 0
+                            label: feature ? feature.name : ""
+                            bad: feature ? feature.error.length > 0 : false
                             showEye: true
-                            eyeOn: feature.visible
-                            selected: browser.isSelected({ kind: type === "ConstructionPlane" ? "plane" : type === "ConstructionAxis" ? "axis" : "point", id: feature.id })
-                            onEyeToggled: feature.visible = !feature.visible
+                            eyeOn: feature ? feature.visible : true
+                            selected: feature ? browser.browserHit("construction", feature.id) : false
+                            onEyeToggled: if (feature) feature.visible = !feature.visible
                             onClicked: {
+                                if (!feature) return
                                 const ref = { kind: type === "ConstructionPlane" ? "plane" : type === "ConstructionAxis" ? "axis" : "point", id: feature.id }
                                 if (browser.app.pickingSketchPlane && ref.kind === "plane") { browser.app.createSketch("feature:" + feature.id); return }
                                 if (browser.app.commandFeatureId) browser.app.selection.toggle(ref)
                                 else browser.app.selection.select(ref, false)
                             }
-                            onDoubleClicked: browser.app.editFeature(feature)
+                            onDoubleClicked: if (feature) browser.app.editFeature(feature)
                             onContextMenu: (x, y) => featureMenu.openFor(feature, this)
                         }
                     }

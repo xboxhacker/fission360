@@ -1353,7 +1353,12 @@ Item {
         if (t === undefined) return
         const step = Math.max(0.01, r.snapStep() / 2)
         let v = Math.round((t + manipDrag.offset) / step) * step
-        if (manipDrag.key !== "distance" || f.type !== "Extrude") v = Math.max(step, v)
+        // Extrude distance and an offset construction plane may cross through zero.
+        // Every other arrow stays a positive length.
+        const signed = (f.type === "Extrude" && manipDrag.key === "distance")
+                    || (f.type === "OffsetFace" && manipDrag.key === "distance")
+                    || (f.type === "ConstructionPlane" && manipDrag.key === "offset")
+        if (!signed) v = Math.max(step, v)
         // Like Fusion: dragging an extrude into the body turns Join into Cut, and back out again
         if (f.type === "Extrude" && manipDrag.key === "distance" && app.hasSolidBefore(f.id)) {
             const op = f.get("operation")
@@ -1407,6 +1412,26 @@ Item {
         }
         if (additive) app.selection.toggle(ref)
         else app.selection.select(ref, false)
+    }
+
+    // One pick per frame. A high-rate mouse otherwise queues a raycast for every sample and the UI falls behind.
+    property bool hoverQueued: false
+    property real hoverX: 0
+    property real hoverY: 0
+    function queueHover(x, y) {
+        hoverX = x
+        hoverY = y
+        if (hoverQueued) return
+        hoverQueued = true
+        Qt.callLater(() => {
+            hoverQueued = false
+            if (mouse.pressed) return
+            const x0 = hoverX, y0 = hoverY
+            manipHover = triad.hover(x0, y0) || nearManip(x0, y0) || nearAngle(x0, y0)
+                         || nearSection(x0, y0) || nearMove(x0, y0) || !!planeEdgeAt(x0, y0)
+            if (manipHover) r.clearHover()
+            else r.hover(x0, y0)
+        })
     }
 
     function doubleClick(x, y) {
@@ -1492,13 +1517,7 @@ Item {
                 pointCanvas.requestPaint()
             } else if (vp.app.activeSketchId && vp.app.sketchTool) {
                 vp.sketchMove(m.x, m.y)
-            } else if (!pressed) {
-                vp.manipHover = triad.hover(m.x, m.y) || vp.nearManip(m.x, m.y) || vp.nearAngle(m.x, m.y)
-                                || vp.nearSection(m.x, m.y)
-                                || vp.nearMove(m.x, m.y) || !!vp.planeEdgeAt(m.x, m.y)
-                if (vp.manipHover) r.clearHover()
-                else r.hover(m.x, m.y)
-            }
+            }             else if (!pressed) vp.queueHover(m.x, m.y)
         }
         onReleased: (m) => {
             if (m.button === Qt.RightButton && !dragged) markMenu.openAt(m.x, m.y)

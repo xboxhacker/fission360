@@ -51,7 +51,9 @@
 #include <BRepGProp.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <TopExp_Explorer.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <Quantity_Color.hxx>
@@ -261,12 +263,14 @@ void testProfilesWithHoles() {
 void testFilletChamferShell() {
     FissionDocument doc;
     auto *s = rectSketch(&doc, "XY", 0, 0, 40, 20);
-    extrude(&doc, s, 10);
+    auto *ex = extrude(&doc, s, 10);
     const TopoDS_Shape box = doc.body(0)->shape();
 
     auto *fillet = doc.addFeature("Fillet", {{"allEdges", true}, {"body", 0}, {"radius", "2 mm"}});
     check(fillet->isHealthy() && totalVolume(&doc) < 8000 && totalVolume(&doc) > 7500, "fillet: all edges",
           status(&doc));
+    check(doc.body(0)->sourceFeature() == ex->id() && doc.body(0)->editedBy() == fillet->id(),
+          "timeline: a fillet is the feature a click on the body should highlight", status(&doc));
     doc.setInputFeatureId(fillet->id());
     check(doc.showingInput() && doc.displayBodyCount() == 1 && GeomUtils::faceMap(doc.displayShape(0)).Extent() == 6
               && GeomUtils::faceMap(doc.body(0)->shape()).Extent() > 6,
@@ -696,6 +700,26 @@ void testSketchOnFaceAndFiles() {
     check(steps.bodyCount() == 2 && steps.body(0)->name() == "Left" && steps.body(1)->name() == "Right",
           "fusion import: step bodies keep their Fusion names",
           steps.bodyCount() == 2 ? steps.body(0)->name() + ", " + steps.body(1)->name() : status(&steps));
+    const int decoded = steps.rebuildCount();
+    steps.timeline()->setMarker(1);
+    steps.rebuild();
+    check(steps.rebuildCount() == decoded && steps.bodyCount() == 1 && near(totalVolume(&steps), 1000, 1),
+          "fusion import: returning to a visited marker reuses the decoded solid",
+          QString("rebuilds %1 -> %2").arg(decoded).arg(steps.rebuildCount()));
+
+    QJsonObject pinned = fusion;
+    pinned.insert(QStringLiteral("timelineMarker"), 1);
+    const QString pinnedPath = dir.filePath("fusion_pinned.f360");
+    {
+        QFile f(pinnedPath);
+        f.open(QIODevice::WriteOnly);
+        f.write(QJsonDocument(pinned).toJson());
+    }
+    FissionDocument atMarker;
+    check(atMarker.load(pinnedPath) && atMarker.timeline()->marker() == 1 && atMarker.timeline()->count() == 4
+              && atMarker.bodyCount() == 1,
+          "fusion import: the exported marker is where the file opens",
+          QString("marker=%1 %2").arg(atMarker.timeline()->marker()).arg(status(&atMarker)));
 }
 
 void testConstraints() {
@@ -1244,6 +1268,77 @@ void testSolidTools() {
     }
 }
 
+void testPullRoundChamfer() {
+    FissionDocument hub;
+    auto *c = qobject_cast<FissionSketch *>(hub.addFeature("Sketch", {{"plane", "XY"}}));
+    c->addCircle(0, 0, 10);
+    hub.rebuild();
+    extrude(&hub, c, "20 mm");
+    const double plain = totalVolume(&hub);
+    const TopoDS_Shape cyl = hub.body(0)->shape();
+    const auto edges = GeomUtils::edgeMap(cyl);
+    int rim = -1;
+    for (int i = 1; i <= edges.Extent(); ++i) {
+        const gp_Pnt m = GeomUtils::edgeMidpoint(TopoDS::Edge(edges(i)));
+        if (near(m.Z(), 20, 1e-4) && near(std::hypot(m.X(), m.Y()), 10, 1e-3)) rim = i - 1;
+    }
+    auto *ch = hub.addFeature("Chamfer", {{"edges", QVariantList{GeomUtils::edgeRef(0, cyl, rim)}}, {"distance", "2 mm"}});
+    int coneIndex = -1;
+    {
+        const auto faces = GeomUtils::faceMap(hub.body(0)->shape());
+        for (int i = 1; i <= faces.Extent(); ++i)
+            if (BRepAdaptor_Surface(TopoDS::Face(faces(i))).GetType() == GeomAbs_Cone) { coneIndex = i - 1; break; }
+    }
+    const QVariantMap coneRef = GeomUtils::faceRef(0, hub.body(0)->shape(), coneIndex);
+    const double before = totalVolume(&hub);
+    check(ch->isHealthy() && coneIndex >= 0, "chamfer: a round edge leaves a cone face", status(&hub));
+    auto *pull = hub.addFeature("OffsetFace", {{"faces", QVariantList{coneRef}}, {"distance", "-1 mm"}});
+    check(pull->isHealthy() && totalVolume(&hub) < before - 1.0,
+          "press/pull: a round chamfer grows when pulled in",
+          QString("%1 -> %2 %3").arg(before).arg(totalVolume(&hub)).arg(status(&hub)));
+    pull->set("distance", "1 mm");
+    hub.rebuild();
+    check(pull->isHealthy() && totalVolume(&hub) > before + 1.0 && totalVolume(&hub) < plain - 1.0,
+          "press/pull: a round chamfer shrinks when pulled out",
+          QString("%1 -> %2 (plain %3) %4").arg(before).arg(totalVolume(&hub)).arg(plain).arg(status(&hub)));
+    hub.removeFeature(pull);
+    auto *ex = hub.addFeature("Extrude", {{"sketch", ""}, {"profiles", QVariantList{coneRef}},
+                                          {"distance", "-1 mm"}, {"operation", "join"}});
+    check(ex->isHealthy() && !ex->error().contains("flat") && totalVolume(&hub) < before - 1.0,
+          "press/pull: extrude of a chamfer face pulls it", status(&hub));
+
+    // The rim stops against a flat, so the cone also touches that wall on a short edge.
+    FissionDocument slotted;
+    auto *sc = qobject_cast<FissionSketch *>(slotted.addFeature("Sketch", {{"plane", "XY"}}));
+    sc->addCircle(0, 0, 10);
+    slotted.rebuild();
+    extrude(&slotted, sc, "20 mm");
+    auto *slot = qobject_cast<FissionSketch *>(slotted.addFeature("Sketch", {{"plane", "XY"}}));
+    slot->addRectangle(6, -15, 20, 30);
+    slotted.rebuild();
+    extrude(&slotted, slot, "20 mm", "cut");
+    const TopoDS_Shape cutCyl = slotted.body(0)->shape();
+    const auto cutEdges = GeomUtils::edgeMap(cutCyl);
+    int arc = -1;
+    for (int i = 1; i <= cutEdges.Extent(); ++i) {
+        const gp_Pnt m = GeomUtils::edgeMidpoint(TopoDS::Edge(cutEdges(i)));
+        if (near(m.Z(), 20, 1e-4) && near(std::hypot(m.X(), m.Y()), 10, 1e-3) && m.X() < 5) arc = i - 1;
+    }
+    slotted.addFeature("Chamfer", {{"edges", QVariantList{GeomUtils::edgeRef(0, cutCyl, arc)}}, {"distance", "2 mm"}});
+    int slotCone = -1;
+    {
+        const auto faces = GeomUtils::faceMap(slotted.body(0)->shape());
+        for (int i = 1; i <= faces.Extent(); ++i)
+            if (BRepAdaptor_Surface(TopoDS::Face(faces(i))).GetType() == GeomAbs_Cone) { slotCone = i - 1; break; }
+    }
+    const double slotBefore = totalVolume(&slotted);
+    auto *slotPull = slotted.addFeature("OffsetFace", {{"faces", QVariantList{GeomUtils::faceRef(0, slotted.body(0)->shape(), slotCone)}},
+                                                        {"distance", "-1 mm"}});
+    check(arc >= 0 && slotCone >= 0 && slotPull->isHealthy() && totalVolume(&slotted) < slotBefore - 1.0,
+          "press/pull: a chamfer that ends on a flat still pulls",
+          QString("%1 -> %2 %3").arg(slotBefore).arg(totalVolume(&slotted)).arg(status(&slotted)));
+}
+
 void testThread() {
     FissionDocument rod;
     auto *c = qobject_cast<FissionSketch *>(rod.addFeature("Sketch", {{"plane", "XY"}}));
@@ -1742,6 +1837,21 @@ void testDrawing() {
           "drawing: HLR projects the design onto a base view",
           QString("%1 visible segs, %2x%3 mm")
               .arg(view->visibleCurves().size()).arg(view->width(), 0, 'f', 1).arg(view->height(), 0, 'f', 1));
+    {
+        const auto circ = DrawingProjector::projectShape(BRepPrimAPI_MakeCylinder(20, 30).Shape(), "top", false);
+        double worst = 0;
+        for (const QVariant &v : circ.visible) {
+            const QVariantMap m = v.toMap();
+            for (const char *xy : {"1", "2"}) {
+                const double x = m.value(QString("x") + xy).toDouble();
+                const double y = m.value(QString("y") + xy).toDouble();
+                worst = std::max(worst, std::abs(std::hypot(x, y) - 20.0));
+            }
+        }
+        check(circ.ok && circ.visible.size() >= 48 && worst < 0.05,
+              "drawing: a cylinder's top view stays a circle",
+              QString("%1 segs, radial error %2 mm").arg(circ.visible.size()).arg(worst, 0, 'f', 3));
+    }
     DrawingView *proj = sheet->addView("projected",
         {{"position", QPointF(200, 50)}, {"parentViewId", view->id()}, {"projectDirection", "right"}});
     const bool projOk = mgr.projectView(proj, &part, doc);
@@ -1778,12 +1888,75 @@ void testDrawing() {
     check(DrawingProjector::projectedOrientation("front", "up", "third") == "top"
               && DrawingProjector::projectedOrientation("front", "up", "first") == "bottom",
           "drawing: first- vs third-angle projection");
+    {
+        const char *corners[] = {
+            "isoFrontTopRight", "isoFrontTopLeft", "isoFrontBottomRight", "isoFrontBottomLeft",
+            "isoBackTopRight", "isoBackTopLeft", "isoBackBottomRight", "isoBackBottomLeft"
+        };
+        bool distinct = true;
+        QString clash;
+        for (int i = 0; i < 8 && distinct; ++i) {
+            const gp_Dir a = DrawingProjector::viewAxis(QString::fromLatin1(corners[i])).Direction();
+            for (int j = i + 1; j < 8; ++j) {
+                const gp_Dir b = DrawingProjector::viewAxis(QString::fromLatin1(corners[j])).Direction();
+                if (a.Dot(b) > 0.99) { distinct = false; clash = QString("%1 ~ %2").arg(corners[i], corners[j]); }
+            }
+        }
+        const gp_Dir iso = DrawingProjector::viewAxis(QStringLiteral("isometric")).Direction();
+        const gp_Dir back = DrawingProjector::viewAxis(QStringLiteral("isoBackTopRight")).Direction();
+        const gp_Dir front = DrawingProjector::viewAxis(QStringLiteral("front")).Direction();
+        check(distinct && iso.Dot(back) > 0.999 && front.Dot(gp_Dir(0, -1, 0)) > 0.999,
+              "drawing: eight isometric corners use different axes", clash);
+        const QByteArray shaded = DrawingProjector::renderShadedPng(
+            BRepPrimAPI_MakeBox(40, 20, 10).Shape(), QStringLiteral("isoFrontTopRight"), 48);
+        const bool pngSig = shaded.size() > 32 && shaded.startsWith(QByteArray("\x89PNG", 4));
+        check(pngSig, "drawing: rendered view is a PNG of the solid", QString::number(shaded.size()));
+    }
+    {
+        DrawingManager noteMgr;
+        DrawingDocument *noteDoc = noteMgr.drawingById(noteMgr.createDrawingDocument(noteMgr.createDrawingInput("note")));
+        DrawingSheet *noteSheet = noteDoc ? noteDoc->sheet(0) : nullptr;
+        const QString noteId = noteSheet ? noteSheet->addAnnotation({{"kind", "text"}, {"text", "Note"}}) : QString();
+        const QString holeId = noteSheet ? noteSheet->addAnnotation({{"kind", "holeNote"}, {"text", "Hole"}}) : QString();
+        if (noteDoc) noteDoc->beginEdit();
+        const bool updated = noteSheet && noteSheet->updateAnnotation(noteId, {{"text", "Edited note"}});
+        if (noteDoc) noteDoc->endEdit();
+        auto textOf = [](DrawingSheet *s, const QString &id) {
+            if (!s) return QString();
+            for (int i = 0; i < s->annotationCount(); ++i) {
+                const QVariantMap a = s->annotation(i);
+                if (a.value("id").toString() == id) return a.value("text").toString();
+            }
+            return QString();
+        };
+        check(updated && textOf(noteSheet, noteId) == "Edited note" && textOf(noteSheet, holeId) == "Hole",
+              "drawing: a text note edits without changing a hole note");
+        const bool undone = noteDoc && noteDoc->undo();
+        DrawingSheet *restored = noteDoc ? noteDoc->sheet(0) : nullptr;
+        check(undone && textOf(restored, noteId) == "Note" && textOf(restored, holeId) == "Hole",
+              "drawing: undo restores the note text");
+    }
 
     const QString bom = mgr.addPartsList(sheet, &part, QPointF(10, 80));
     const QString rev = mgr.addRevisionTable(sheet, QPointF(10, 120));
     check(!bom.isEmpty() && !rev.isEmpty() && sheet->tableCount() >= 2, "drawing: parts list and revision table");
     doc->pushHistory("Added parts list");
     check(doc->history().size() >= 1, "drawing: history records sheet actions");
+    {
+        DrawingManager undoMgr;
+        DrawingDocument *undoDoc = undoMgr.drawingById(undoMgr.createDrawingDocument(undoMgr.createDrawingInput("undo-design")));
+        DrawingSheet *undoSheet = undoDoc ? undoDoc->sheet(0) : nullptr;
+        const int before = undoSheet ? undoSheet->viewCount() : -1;
+        if (undoDoc) undoDoc->beginEdit();
+        if (undoSheet) undoSheet->addView("base", {{QStringLiteral("orientation"), QStringLiteral("top")}});
+        if (undoDoc) undoDoc->endEdit();
+        const bool undone = undoDoc && undoDoc->undo();
+        const int afterUndo = undoDoc && undoDoc->sheet(0) ? undoDoc->sheet(0)->viewCount() : -1;
+        check(undone && afterUndo == before, "drawing: undo restores the sheet", QString::number(afterUndo));
+        const bool redone = undoDoc && undoDoc->redo();
+        const int afterRedo = undoDoc && undoDoc->sheet(0) ? undoDoc->sheet(0)->viewCount() : -1;
+        check(redone && afterRedo == before + 1, "drawing: redo puts the view back", QString::number(afterRedo));
+    }
     const QString tiff = QDir::temp().filePath("f360_drawing_test.tif");
     QFile::remove(tiff);
     check(mgr.exportTiff(sheet, tiff) && QFileInfo::exists(tiff), "drawing: export TIFF", mgr.lastError());
@@ -1807,11 +1980,158 @@ void testDrawing() {
               && syncDoc->sourceDesignRevision() == part.contentRevision(),
           "drawing: updateDrawingFromDesign clears out-of-date",
           QString("n=%1 src=%2").arg(updated).arg(syncDoc->sourceDesignRevision()));
+
+    sheet->addAnnotation({{QStringLiteral("kind"), QStringLiteral("image")},
+                          {QStringLiteral("path"), QStringLiteral("C:/drawings/mark.png")},
+                          {QStringLiteral("x"), 30}, {QStringLiteral("y"), 30},
+                          {QStringLiteral("width"), 40}, {QStringLiteral("height"), 10}});
+    doc->setSourceDesignRevision(4);
+    const QJsonObject drawingJson = doc->toJson();
+    DrawingDocument *round = DrawingDocument::fromJson(drawingJson, &mgr);
+    DrawingSheet *roundSheet = round ? round->sheet(0) : nullptr;
+    DrawingView *roundView = roundSheet ? roundSheet->viewById(view->id()) : nullptr;
+    DrawingView *roundProj = roundSheet ? roundSheet->viewById(proj->id()) : nullptr;
+    DrawingView *roundDetail = roundSheet ? roundSheet->viewById(det->id()) : nullptr;
+    bool imageOk = false;
+    if (roundSheet) {
+        for (int i = 0; i < roundSheet->annotationCount(); ++i) {
+            const QVariantMap ann = roundSheet->annotation(i);
+            if (ann.value(QStringLiteral("kind")).toString() == QLatin1String("image")
+                && ann.value(QStringLiteral("path")).toString() == QLatin1String("C:/drawings/mark.png"))
+                imageOk = true;
+        }
+    }
+    check(round && round->id() == doc->id() && round->standard() == QLatin1String("ISO")
+              && round->projectionAngle() == QLatin1String("third") && round->sheetCount() == 3
+              && round->sourceDesignRevision() == 4 && round->history().size() == doc->history().size(),
+          "drawing save: document json keeps standard, angle, and sheets");
+    check(roundSheet && roundSheet->partName() == QLatin1String("Stock") && roundSheet->drawnBy() == QLatin1String("Test")
+              && roundSheet->revision() == QLatin1String("A") && roundSheet->size() == QLatin1String("A3")
+              && roundSheet->titleBlockName() == sheet->titleBlockName()
+              && roundSheet->viewCount() == sheet->viewCount()
+              && roundSheet->annotationCount() == sheet->annotationCount()
+              && roundSheet->tableCount() == sheet->tableCount()
+              && roundSheet->table(0).value(QStringLiteral("kind")) == sheet->table(0).value(QStringLiteral("kind"))
+              && roundSheet->sketchCount() == 1 && roundSheet->sketch(0) && roundSheet->sketch(0)->curveCount() == 1
+              && imageOk,
+          "drawing save: sheet, title block, tables, sketch, and image path round-trip");
+    check(roundView && roundView->projected() && roundView->orientation() == QLatin1String("front")
+              && roundView->visibleCurves().size() == view->visibleCurves().size()
+              && near(roundView->position().x(), view->position().x()) && near(roundView->scale(), view->scale())
+              && near(roundView->width(), view->width()),
+          "drawing save: base view curves and placement round-trip",
+          QString("%1 vs %2 segs").arg(roundView ? roundView->visibleCurves().size() : 0).arg(view->visibleCurves().size()));
+    check(roundProj && roundProj->parentViewId() == view->id() && roundProj->orientation() == QLatin1String("right"),
+          "drawing save: projected view parent and orientation round-trip");
+    check(roundDetail && near(roundDetail->detailRadius(), det->detailRadius()),
+          "drawing save: detail radius round-trips");
+    DrawingSheet *customBack = round ? round->sheet(2) : nullptr;
+    check(customBack && customBack->size() == QLatin1String("custom") && customBack->width() >= customBack->height(),
+          "drawing save: custom sheet size round-trips");
+
+    QTemporaryDir drawDir;
+    check(drawDir.isValid(), "drawing save: temp dir");
+    FissionDocument carrier;
+    carrier.linkAsset(QStringLiteral("drawing"), doc->id(), doc->name());
+    carrier.setDrawingPayload(QJsonArray{drawingJson});
+    check(!carrier.toJson().contains(QStringLiteral("drawings")),
+          "drawing save: undo snapshot omits the drawing body");
+    const QString drawPath = QDir(drawDir.path()).filePath(QStringLiteral("with-drawing.f360"));
+    check(carrier.save(drawPath), "drawing save: writes the design", carrier.lastError());
+    QFile drawFile(drawPath);
+    check(drawFile.open(QIODevice::ReadOnly), "drawing save: reopen file");
+    const QJsonObject savedRoot = QJsonDocument::fromJson(drawFile.readAll()).object();
+    drawFile.close();
+    check(savedRoot.value(QStringLiteral("drawings")).toArray().size() == 1,
+          "drawing save: live file stores the drawing body");
+    const QJsonArray drawHist = savedRoot.value(QStringLiteral("history")).toArray();
+    const QByteArray snapRaw = drawHist.isEmpty() ? QByteArray()
+                                                   : DocumentVersionStore::payloadFromEntry(drawHist.at(0).toObject());
+    const QJsonObject snap = QJsonDocument::fromJson(snapRaw).object();
+    check(!snap.contains(QStringLiteral("drawings")) && !snap.contains(QStringLiteral("history"))
+              && snap.value(QStringLiteral("linkedAssets")).toArray().size() >= 1,
+          "drawing save: version snapshot keeps the link id and omits the drawing body");
+    check(carrier.revertToVersion(1) && carrier.drawingPayload().size() == 1,
+          "drawing save: revert keeps the live drawing body", carrier.lastError());
+    FissionDocument reloadedDraw;
+    check(reloadedDraw.load(drawPath) && reloadedDraw.drawingPayload().size() == 1,
+          "drawing save: load restores the drawing payload", reloadedDraw.lastError());
+    DrawingManager loadedMgr;
+    loadedMgr.restoreFromJson(reloadedDraw.drawingPayload());
+    DrawingDocument *back = loadedMgr.drawingById(doc->id());
+    DrawingView *backView = back && back->sheet(0) ? back->sheet(0)->viewById(view->id()) : nullptr;
+    check(back && back->sheetCount() == 3 && backView
+              && backView->visibleCurves().size() == view->visibleCurves().size(),
+          "drawing save: reopening the design brings the sheet back");
+
+    FissionDocument legacy;
+    legacy.fromJson(QJsonObject{
+        {QStringLiteral("format"), QStringLiteral("Fission360")},
+        {QStringLiteral("name"), QStringLiteral("Legacy")},
+        {QStringLiteral("linkedAssets"),
+         QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("drawing")},
+                                {QStringLiteral("id"), QStringLiteral("gone")},
+                                {QStringLiteral("name"), QStringLiteral("Drawing")}}}},
+    });
+    check(legacy.drawingPayload().isEmpty() && legacy.linkedAssets().size() == 1,
+          "drawing save: a link id without a drawing body still opens");
+    DrawingManager skip;
+    skip.restoreFromJson(QJsonArray{QJsonObject(), QJsonObject{{QStringLiteral("name"), QStringLiteral("no id")}}});
+    check(skip.drawingCount() == 0, "drawing save: missing drawing payload does not create a sheet");
 }
 
 // Fusion bulk exports embed large per-step STEP blobs (snapshotStepB64). Saving used to pretty-print
 // the whole document twice on the UI thread and freeze Windows ("Not Responding"). This builds a
 // synthetic large timeline, times save, and checks progress is reported so the event loop can pump.
+void testResultCacheSkipsRebuild() {
+    QTemporaryDir dir;
+    check(dir.isValid(), "open cache: temp dir");
+    FissionDocument doc;
+    box(&doc, 0, 0, 10, 20, 30);
+    const double vol = totalVolume(&doc);
+    const QString path = dir.filePath("cached.f360");
+    check(doc.save(path), "open cache: save writes the file", doc.lastError());
+
+    QFile file(path);
+    check(file.open(QIODevice::ReadOnly), "open cache: read the file back");
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    const QJsonObject cache = root.value(QStringLiteral("resultCache")).toObject();
+    check(!cache.value(QStringLiteral("key")).toString().isEmpty()
+              && cache.value(QStringLiteral("bodies")).toArray().size() == 1,
+          "open cache: the file stores the rebuilt solid");
+
+    FissionDocument again;
+    check(again.load(path) && again.rebuildCount() == 0 && near(totalVolume(&again), vol),
+          "open cache: a matching file skips the rebuild",
+          QString("rebuilds=%1 %2").arg(again.rebuildCount()).arg(status(&again)));
+
+    QJsonObject stale = root;
+    QJsonObject bad = cache;
+    bad.insert(QStringLiteral("key"), QStringLiteral("stale"));
+    stale.insert(QStringLiteral("resultCache"), bad);
+    FissionDocument rebuilt;
+    rebuilt.fromJson(stale);
+    check(rebuilt.rebuildCount() == 1 && near(totalVolume(&rebuilt), vol),
+          "open cache: a stale solid cache rebuilds",
+          QString("rebuilds=%1 %2").arg(rebuilt.rebuildCount()).arg(status(&rebuilt)));
+
+    // Two boxes, marker rolled back to the first. Save must keep that marker and cache only that solid.
+    FissionDocument rolled;
+    box(&rolled, 0, 0, 10, 20, 30);
+    box(&rolled, 40, 0, 10, 10, 10);
+    const int features = rolled.timeline()->count();
+    rolled.timeline()->setMarker(2);
+    const QString rolledPath = dir.filePath("rolled.f360");
+    check(rolled.save(rolledPath), "open cache: save at a mid-timeline marker", rolled.lastError());
+    FissionDocument opened;
+    check(opened.load(rolledPath) && opened.timeline()->marker() == 2 && opened.timeline()->count() == features
+              && opened.bodyCount() == 1 && near(totalVolume(&opened), vol) && opened.rebuildCount() == 0,
+          "open cache: opening returns to the saved marker",
+          QString("marker=%1/%2 rebuilds=%3 %4").arg(opened.timeline()->marker()).arg(opened.timeline()->count())
+              .arg(opened.rebuildCount()).arg(status(&opened)));
+}
+
 void testLargeFileSave() {
     if (!QCoreApplication::instance()) return;
     QTemporaryDir dir;
@@ -2885,19 +3205,20 @@ void testSolidCraftParity() {
               "sc-parity #3578: combine join of overlapping boxes", status(&doc));
     }
 
-    // SC #3526 — intersect on a multi-lump body must not silently wipe everything
+    // SC #3526 — a disjoint join must keep every lump, and intersect must not wipe a lump it does not touch.
+    // Fission stores each solid as its own body, so two boxes that do not meet stay two bodies (volume 2000).
     {
         FissionDocument doc;
         box(&doc, 0, 0, 10, 10, 10);
         box(&doc, 40, 0, 10, 10, 10);
         auto *join = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "join"}});
-        check(join->isHealthy() && doc.bodyCount() == 1 && GeomUtils::solids(doc.body(0)->shape()).size() >= 2
-                  && near(totalVolume(&doc), 2000),
+        check(join->isHealthy() && doc.bodyCount() == 2 && near(totalVolume(&doc), 2000),
               "sc-parity #3526: join of distant boxes keeps both lumps", status(&doc));
-        box(&doc, 0, 0, 10, 10, 10);   // tool overlaps only the first lump
-        auto *ix = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{1}}, {"operation", "intersect"}});
-        check(ix->isHealthy() && totalVolume(&doc) > 500 && totalVolume(&doc) < 1500,
-              "sc-parity #3526: intersect on multi-lump keeps the overlapping lump", status(&doc));
+        box(&doc, -5, 0, 10, 10, 10);   // overlaps only the lump at the origin; the distant lump is another body
+        const int tool = doc.bodyCount() - 1;
+        auto *ix = doc.addFeature("Combine", {{"target", 0}, {"tools", QVariantList{tool}}, {"operation", "intersect"}});
+        check(ix->isHealthy() && doc.bodyCount() == 2 && near(totalVolume(&doc), 1500),
+              "sc-parity #3526: intersect keeps the overlapping lump and the other body", status(&doc));
     }
 
     // SC #3528 — cut near a revolve seam must not delete most of the body
@@ -2928,8 +3249,22 @@ void testSolidCraftParity() {
         auto *fil = doc.addFeature("Fillet", {{"allEdges", true}, {"body", 0}, {"radius", "2 mm"}});
         const double beforeShell = totalVolume(&doc);
         check(fil->isHealthy() && beforeShell > 0, "sc-parity #3573: fillet after taper", status(&doc));
-        const auto top = [](const gp_Pnt &p) { return p.Z() > 35; };
-        const int topFace = findFace(&doc, 0, top);
+        // Blend faces also sit above z = 35. The opening is the upward planar cap, not a fillet.
+        int topFace = -1;
+        double bestZ = -1e300;
+        {
+            const auto faces = GeomUtils::faceMap(doc.body(0)->shape());
+            for (int i = 1; i <= faces.Extent(); ++i) {
+                const TopoDS_Face f = TopoDS::Face(faces(i));
+                BRepAdaptor_Surface surf(f, Standard_False);
+                if (surf.GetType() != GeomAbs_Plane) continue;
+                gp_Dir n = surf.Plane().Axis().Direction();
+                if (f.Orientation() == TopAbs_REVERSED) n.Reverse();
+                if (n.Z() < 0.9) continue;
+                const double z = GeomUtils::faceCentroid(f).Z();
+                if (z > bestZ) { bestZ = z; topFace = i - 1; }
+            }
+        }
         auto *sh = doc.addFeature("Shell", {{"faces", QVariantList{GeomUtils::faceRef(0, doc.body(0)->shape(), topFace)}},
                                             {"thickness", "2 mm"}});
         const bool valid = !doc.body(0)->shape().IsNull() && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid();
@@ -2961,14 +3296,18 @@ void testSolidCraftParity() {
         auto *pad = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
         pad->addRectangle(5, 5, 10, 10);
         doc.rebuild();
+        // The pad is drawn on the same XY plane as the box, so 10 mm of the 15 mm extrude is already
+        // inside the body and a join only adds the 5 mm that sticks out.
         auto *join = extrude(&doc, pad, "15 mm", "join");
-        check(join->isHealthy() && near(totalVolume(&doc), 40 * 20 * 10 + 10 * 10 * 15, 2e-3),
+        const double joined = 40.0 * 20.0 * 10.0 + 10.0 * 10.0 * 5.0;
+        check(join->isHealthy() && near(totalVolume(&doc), joined, 2e-3),
               "sc-parity #3563: extrude join onto an existing body", status(&doc));
         auto *hole = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
         hole->addCircle(30, 10, 3);
         doc.rebuild();
         auto *thru = extrude(&doc, hole, "1 mm", "cut", {{"extent", "throughAll"}});
-        check(thru->isHealthy() && near(totalVolume(&doc), 40 * 20 * 10 + 10 * 10 * 15 - M_PI * 9 * 10, 2e-3),
+        // The hole is clear of the pad, so through-all removes a cylinder the full 10 mm of the base.
+        check(thru->isHealthy() && near(totalVolume(&doc), joined - M_PI * 9.0 * 10.0, 2e-3),
               "sc-parity #3563: extrude through-all cut", status(&doc));
     }
 }
@@ -2997,6 +3336,7 @@ int run() {
     testTangentChain();
     testSketchEditing();
     testSolidTools();
+    testPullRoundChamfer();
     testHoleAndThread();
     testMeshBodies();
     testInspect();
@@ -3017,6 +3357,7 @@ int run() {
     testProgress();
     testBackgroundJobs();
     testDrawing();
+    testResultCacheSkipsRebuild();
     testLargeFileSave();
     testDocumentVersionsAndAutosave();
     testGifWriter();

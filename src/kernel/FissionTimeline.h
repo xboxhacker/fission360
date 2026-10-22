@@ -26,6 +26,11 @@ public:
 
     Q_INVOKABLE FissionFeature *at(int index) const;
     Q_INVOKABLE int indexOf(FissionFeature *feature) const { return m_features.indexOf(feature); }
+    Q_INVOKABLE int indexOfId(const QString &id) const {
+        for (int i = 0; i < m_features.size(); ++i)
+            if (m_features[i] && m_features[i]->id() == id) return i;
+        return -1;
+    }
     const QList<FissionFeature *> &features() const { return m_features; }
 
     void insert(int index, FissionFeature *feature);

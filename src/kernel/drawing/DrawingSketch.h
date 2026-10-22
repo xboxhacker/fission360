@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QJsonObject>
 #include <QVariantMap>
 #include <QQmlEngine>
 
@@ -34,6 +35,9 @@ public:
     Q_INVOKABLE QString addRectangle(double x, double y, double w, double h);
     Q_INVOKABLE QString addText(double x, double y, const QString &text, double fontSize = 3.5);
     Q_INVOKABLE bool removeCurve(const QString &curveId);
+
+    QJsonObject toJson() const;
+    static DrawingSketch *fromJson(const QJsonObject &obj, QObject *parent = nullptr);
 
 signals:
     void nameChanged();

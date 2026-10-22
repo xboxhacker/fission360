@@ -23,6 +23,9 @@ bool FissionConstructionPlane::compute(RebuildContext &ctx) {
         double offset = 0;
         if (!ctx.resolvePlane(get("base"), base, err)) return fail(err);
         if (!number(ctx, "offset", offset)) return false;
+        // Same drag arrow as Extrude: origin on the reference plane, tip at the offset.
+        // The viewport writes the "offset" property; the dialog field reads that property.
+        setManipulator(base.Location(), base.Direction(), QStringLiteral("offset"), offset);
         m_plane = base.Translated(gp_Vec(base.Direction()) * offset);
     } else if (mode == "angle") {
         gp_Ax3 base;

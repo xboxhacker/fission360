@@ -11,8 +11,8 @@ Popup {
     modal: true
     focus: true
     anchors.centerIn: Overlay.overlay
-    width: 360
-    height: 460
+    width: 380
+    height: Math.min((Overlay.overlay ? Overlay.overlay.height : 640) - 48, formCol.implicitHeight + 28)
     padding: 0
     closePolicy: Popup.CloseOnEscape
 
@@ -29,11 +29,24 @@ Popup {
 
     signal accepted(var input)
 
+    function pinComboPopup(box) {
+        if (!box || !box.popup) return
+        box.popup.parent = Overlay.overlay
+        box.popup.z = 2000
+        box.popup.aboutToShow.connect(function() {
+            const p = box.mapToItem(Overlay.overlay, 0, box.height)
+            box.popup.x = p.x
+            box.popup.y = p.y
+            box.popup.width = box.width
+        })
+    }
+
     background: Rectangle { color: Theme.panel; border.color: Theme.border; radius: 4 }
 
     ColumnLayout {
+        id: formCol
         anchors.fill: parent
-        anchors.margins: 12
+        anchors.margins: 14
         spacing: 8
 
         Text { text: "Create Drawing"; font.pixelSize: 14; font.bold: true; color: Theme.text }
@@ -47,31 +60,45 @@ Popup {
 
             Label { text: "Standard"; color: Theme.text }
             ComboBox {
+                id: stdBox
                 model: ["ISO", "ASME"]
                 currentIndex: standard === "ASME" ? 1 : 0
                 onActivated: (i) => standard = model[i]
                 Layout.fillWidth: true
+                implicitHeight: 30
+                Component.onCompleted: dlg.pinComboPopup(stdBox)
             }
             Label { text: "Projection"; color: Theme.text }
             ComboBox {
+                id: projBox
                 model: ["third", "first"]
                 currentIndex: projectionAngle === "first" ? 1 : 0
                 onActivated: (i) => projectionAngle = model[i]
                 Layout.fillWidth: true
+                implicitHeight: 30
+                Component.onCompleted: dlg.pinComboPopup(projBox)
             }
             Label { text: "Sheet size"; color: Theme.text }
             ComboBox {
+                id: sizeBox
                 model: ["A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "custom"]
-                Component.onCompleted: currentIndex = Math.max(0, model.indexOf(sheetSize))
+                Component.onCompleted: {
+                    currentIndex = Math.max(0, model.indexOf(sheetSize))
+                    dlg.pinComboPopup(sizeBox)
+                }
                 onActivated: (i) => sheetSize = model[i]
                 Layout.fillWidth: true
+                implicitHeight: 30
             }
             Label { text: "Orientation"; color: Theme.text }
             ComboBox {
+                id: landBox
                 model: ["landscape", "portrait"]
                 currentIndex: orientation === "portrait" ? 1 : 0
                 onActivated: (i) => orientation = model[i]
                 Layout.fillWidth: true
+                implicitHeight: 30
+                Component.onCompleted: dlg.pinComboPopup(landBox)
             }
             Label { text: "Width (mm)"; color: Theme.text; visible: sheetSize === "custom" }
             SpinBox {

@@ -4,6 +4,8 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QByteArray>
+#include <QJsonObject>
 #include <QVariantMap>
 #include <QQmlEngine>
 #include "DrawingSheet.h"
@@ -25,6 +27,8 @@ class DrawingDocument : public QObject {
     Q_PROPERTY(int activeSheetIndex READ activeSheetIndex WRITE setActiveSheetIndex NOTIFY activeSheetChanged)
     // Lightweight drawing history (view / table / annotation actions) for the drawing browser timeline
     Q_PROPERTY(QStringList history READ history NOTIFY historyChanged)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoChanged)
 
 public:
     explicit DrawingDocument(const QString &id, const QString &name,
@@ -56,16 +60,30 @@ public:
     QStringList history() const { return m_history; }
     Q_INVOKABLE void pushHistory(const QString &entry);
 
+    // One undo step. beginEdit snapshots the sheet; nested calls share that snapshot.
+    bool canUndo() const { return !m_undo.isEmpty(); }
+    bool canRedo() const { return !m_redo.isEmpty(); }
+    Q_INVOKABLE void beginEdit();
+    Q_INVOKABLE void endEdit();
+    Q_INVOKABLE bool undo();
+    Q_INVOKABLE bool redo();
+
+    QJsonObject toJson() const;
+    static DrawingDocument *fromJson(const QJsonObject &obj, QObject *parent = nullptr);
+
 signals:
     void nameChanged();
     void sheetsChanged();
     void activeSheetChanged();
     void historyChanged();
     void syncChanged();
+    void undoChanged();
 
 private:
     DrawingSheet *makeSheet(const QString &name, const QString &size, double width, double height,
                             const QString &orientation);
+    void pushUndoSnapshot();
+    bool applySnapshot(const QByteArray &bytes);
 
     QString m_id;
     QString m_name;
@@ -77,4 +95,8 @@ private:
     QList<DrawingSheet *> m_sheets;
     int m_activeSheet = 0;
     QStringList m_history;
+    QList<QByteArray> m_undo;
+    QList<QByteArray> m_redo;
+    int m_editDepth = 0;
+    bool m_applying = false;
 };

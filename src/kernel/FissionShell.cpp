@@ -260,9 +260,22 @@ TopoDS_Shape punchOpenings(const TopoDS_Shape &solid, const TopTools_ListOfShape
             return {};
         }
     }
-    hollow = sewSolid(hollow);
-    TopoDS_Shape ok = acceptShell(hollow, maxVolume, false);
-    if (ok.IsNull()) ok = acceptShell(hollow, maxVolume, true);
+    // Sewing can be what makes a checked solid fail, so try the punched shape first.
+    auto checked = [&](const TopoDS_Shape &s) -> TopoDS_Shape {
+        TopoDS_Shape ok = acceptShell(s, maxVolume, false);
+        if (!ok.IsNull()) return ok;
+        ok = acceptShell(s, maxVolume, true);
+        if (!ok.IsNull()) return ok;
+        // Offset of a blend whose radius equals the wall leaves slivers under 0.01 mm².
+        // A solid that still passes BRepCheck is a usable shell; spiked Arc results never get here
+        // because they fail the check.
+        const TopoDS_Shape fixed = tryFix(s);
+        if (usableSolid(fixed, maxVolume, true, false)) return fixed;
+        if (usableSolid(s, maxVolume, true, false)) return s;
+        return {};
+    };
+    TopoDS_Shape ok = checked(hollow);
+    if (ok.IsNull()) ok = checked(sewSolid(hollow));
     return ok;
 }
 

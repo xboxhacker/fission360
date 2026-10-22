@@ -2,7 +2,7 @@
 
 **Status:** Active development · **Windows** (primary) · GPL-3.0-or-later · not a 1.0 release
 
-A fast, offline, parametric 3D CAD application. Designs are a **timeline of editable features** you can scrub, reorder and re-dimension — not a bag of frozen mesh files. No cloud, no sign-in, no subscription. The whole design lives in one small text file you own.
+A fast, offline, parametric 3D CAD application. Designs are a **timeline of editable features** you can scrub, reorder and re-dimension — not a bag of frozen mesh files. No cloud, no sign-in, no subscription. The whole design lives in one `.f360` file you own.
 
 **Where Fission sits:** Fission is the OCCT-backed, print-shop CAD — industry STEP/IGES through [Open CASCADE](https://dev.opencascade.org/), a **Fusion 360 → `.f360` import** path, and **one-click Send to Slicer** (OrcaSlicer / Bambu Studio). It is not trying to be the only open CAD on GitHub; it is the one that speaks manufacturing file formats and your existing Fusion / slicer workflow. Other open projects (including [SolidCraft](https://github.com/tangency-labs/solidcraft)) prove the category is real — we stay clean-room relative to them too: **ideas and public docs only, never their source.**
 
@@ -24,11 +24,11 @@ Written clean-room: the codebase is hand-built and not derived from another vend
 - **Rendering** — PBR materials, HDRI/IBL environments, PBR texture maps, CPU Monte-Carlo path tracer.
 - **Import / interop** — STEP, IGES, STL, OBJ. **Import a Fusion 360 design** via the companion [Fission 360 Bulk Exporter](#fusion-import) add-in (runs inside Fusion and writes a `.f360` file Fission opens directly).
 - **Send to slicer** — tessellate **visible** bodies to STL and launch **OrcaSlicer** or **Bambu Studio**. Display Settings ▸ Slicer: auto-detect, force one slicer, **Browse…** or **Search for slicer** (finds custom builds). Hidden bodies are never sent.
-- **Document history** — internal version snapshots beside the file plus AppData autosave / crash recovery.
+- **Document history** — compressed save snapshots live **inside** the `.f360` (`history` array). The same file stores a result cache of the solids at the timeline marker, so the next open can skip the rebuild. Crash autosave stays in AppData. Legacy `<file>.f360.versions/` folders are imported on open and removed after the next save.
 
 ## The file format
 
-A Fission 360 design is a single compact JSON file with a `.f360` extension — human-readable, diff-able, and yours. It stores the feature timeline, parameters, sketches, bodies and appearance. No proprietary lock-in.
+A Fission 360 design is a single JSON file with a `.f360` extension. It stores the feature timeline, parameters, sketches, appearance, a capped **version history** (`history`), and a **result cache**: the compressed solids at the timeline marker where the file was saved. Opening a matching file restores those solids and that marker instead of replaying the timeline. Change a feature, a parameter, or the units, and the next open rebuilds. Undo steps and version snapshots omit the cache. No history folder sits beside the file.
 
 ## Tech stack
 
@@ -94,9 +94,9 @@ The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python
 
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history, autosave, **Send to Slicer**, and a headless **MCP** server (`Fission360 --mcp`) are in. Up next: real CAM toolpaths and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.35**. Local Windows test zip: `dist/Fission360-1.13.35-windows-x64.zip` (not published). GitHub release remains **v1.13.34**. Up next: real CAM toolpaths and optional lock/sync.
 
-MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md).
+MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md). SolidCraft issue recipes: [`docs/solidcraft-issue-parity.md`](docs/solidcraft-issue-parity.md).
 
 More detail: [`CHANGELOG.md`](CHANGELOG.md) · [`FISSION_360_PROJECT.md`](FISSION_360_PROJECT.md)
 

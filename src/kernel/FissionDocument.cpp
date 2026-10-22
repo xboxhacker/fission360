@@ -3,20 +3,29 @@
 #include "FissionDocument.h"
 #include "Expression.h"
 #include "FileExport.h"
+#include "FissionConstruction.h"
 #include "FissionProgress.h"
+#include "FissionSketch.h"
 #include "GeomUtils.h"
 #include "MeshUtils.h"
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QScopeGuard>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <algorithm>
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QImage>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
+#include <sstream>
+#include <BRepAdaptor_Surface.hxx>
 #include <Standard_Failure.hxx>
+#include <TopoDS.hxx>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -805,6 +814,7 @@ void FissionDocument::linkAsset(const QString &kind, const QString &id, const QS
             m["sourceRevision"] = m_contentRevision;
             m["outOfDate"] = false;
             m_linkedAssets[i] = m;
+            if (kind == QLatin1String("drawing")) touchDrawingLink();
             emit linkedAssetsChanged();
             return;
         }
@@ -817,6 +827,7 @@ void FissionDocument::linkAsset(const QString &kind, const QString &id, const QS
         {"sourceRevision", m_contentRevision},
         {"outOfDate", false},
     });
+    if (kind == QLatin1String("drawing")) touchDrawingLink();
     emit linkedAssetsChanged();
 }
 
@@ -851,8 +862,29 @@ bool FissionDocument::anyLinkedAssetOutOfDate() const {
     return false;
 }
 
+void FissionDocument::touchDrawingLink() {
+    if (m_restoring) return;
+    m_drawingsLive = true;
+    if (m_modified) return;
+    m_modified = true;
+    emit modifiedChanged();
+}
+
+void FissionDocument::setDrawingPayload(const QJsonArray &drawings) {
+    m_drawings = drawings;
+}
+
+void FissionDocument::copyDrawingPayloadFromFile(const QString &path) {
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return;
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    if (root.contains(QStringLiteral("drawings")))
+        m_drawings = root.value(QStringLiteral("drawings")).toArray();
+}
+
 QByteArray FissionDocument::snapshotJsonForHistory() const {
-    // Versions skip thumbnail and nested history so undo / autosave stay light
+    // Versions and autosave skip thumbnail, nested history, and drawing bodies
     return QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
 }
 
@@ -1119,8 +1151,25 @@ void FissionDocument::scheduleRebuild() {
     m_rebuildTimer.start();
 }
 
+void FissionDocument::syncModelToMarker() {
+    if (m_rebuildTimer.isActive()) {
+        rebuild();
+        return;
+    }
+    if (m_resultFromCache) return;
+    const auto &fs = m_timeline->features();
+    const int end = std::min<int>(fs.size(), m_timeline->marker());
+    bool fresh = m_steps.size() >= end;
+    for (int i = 0; i < end && fresh; ++i) {
+        fresh = m_steps[i].feature == fs[i] && m_steps[i].revision == fs[i]->revision()
+            && m_steps[i].suppressed == fs[i]->isSuppressed();
+    }
+    if (!fresh) rebuild();
+}
+
 void FissionDocument::rebuild() {
     m_rebuildTimer.stop();
+    m_resultFromCache = false;
     evaluateParameters();
 
     QStringList key{m_lengthUnit};
@@ -1128,7 +1177,12 @@ void FissionDocument::rebuild() {
         key << it.key() + "=" + QString::number(it.value(), 'g', 17);
     key.sort();
     const QString stepsKey = key.join(';');
-    if (stepsKey != m_stepsKey) { m_steps.clear(); m_stepsKey = stepsKey; }
+    if (stepsKey != m_stepsKey) {
+        m_steps.clear();
+        m_atMarker.clear();
+        m_atMarkerOrder.clear();
+        m_stepsKey = stepsKey;
+    }
 
     const auto &fs = m_timeline->features();
     const int end = std::min<int>(fs.size(), m_timeline->marker());
@@ -1146,6 +1200,23 @@ void FissionDocument::rebuild() {
         if (!fs[i]->isSuppressed() && hasFusionSnap(fs[i])) lastFusionSnap = i;
     const bool fusionHeavy = lastFusionSnap >= 0;
 
+    QString markerSig;
+    if (fusionHeavy) {
+        markerSig.reserve(end * 12);
+        for (int i = 0; i < end; ++i)
+            markerSig += QString::number(fs[i]->revision()) + (fs[i]->isSuppressed() ? QLatin1Char('s') : QLatin1Char('a')) + QLatin1Char(';');
+        const auto cached = m_atMarker.constFind(end);
+        if (cached != m_atMarker.cend() && cached->sig == markerSig) {
+            m_steps.clear();
+            adoptBodies(cached->bodies);
+            m_resultFromCache = true;
+            emit bodiesChanged();
+            emit rebuilt();
+            emit displayChanged();
+            return;
+        }
+    }
+
     int reuse = 0;
     if (fusionHeavy) {
         // Intermediate fusion snapshots were skipped — step cache is not trustworthy across marker moves
@@ -1160,8 +1231,9 @@ void FissionDocument::rebuild() {
     }
     const int start = std::min(reuse, end);
 
-    QElapsedTimer total, one;
+    QElapsedTimer total, one, pumpClock;
     total.start();
+    pumpClock.start();
     RebuildContext ctx = start > 0 ? m_steps[start - 1].after : RebuildContext(this);
     for (int i = start; i < end; ++i) {
         FissionFeature *f = fs[i];
@@ -1180,6 +1252,13 @@ void FissionDocument::rebuild() {
             if (one.elapsed() > 50) qInfo("rebuild: %s (%s) took %lld ms", qPrintable(f->name()), qPrintable(f->type()), one.elapsed());
         }
         m_steps.append({f, f->revision(), f->isSuppressed(), ctx});
+        if (m_loading && pumpClock.elapsed() > 40) {
+            const double fraction = 0.70 + 0.22 * double(i + 1) / double(std::max(1, end));
+            FissionProgress::report(QStringLiteral("open"), fraction, QStringLiteral("Rebuilding…"));
+            if (QCoreApplication::instance())
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+            pumpClock.restart();
+        }
     }
     if (total.elapsed() > 50) qInfo("rebuild: steps %d-%d of %d took %lld ms", start + 1, end, end, total.elapsed());
 
@@ -1193,20 +1272,15 @@ void FissionDocument::rebuild() {
             break;
         }
 
-    while (m_bodies.size() > ctx.bodies.size()) m_bodies.takeLast()->deleteLater();
-    while (m_bodies.size() < ctx.bodies.size()) {
-        auto *b = new FissionBody(this);
-        connect(b, &FissionBody::visibilityChanged, this, &FissionDocument::displayChanged);
-        connect(b, &FissionBody::appearanceChanged, this, [this] {
-            if (!m_restoring) setModified(true);
-            emit displayChanged();
-        });
-        m_bodies.append(b);
+    adoptBodies(ctx.bodies);
+    if (fusionHeavy && !markerSig.isEmpty()) {
+        m_atMarker.insert(end, {markerSig, ctx.bodies});
+        m_atMarkerOrder.removeAll(end);
+        m_atMarkerOrder.append(end);
+        while (m_atMarkerOrder.size() > 8)
+            m_atMarker.remove(m_atMarkerOrder.takeFirst());
     }
-    for (int i = 0; i < ctx.bodies.size(); ++i) {
-        m_bodies[i]->setSourceFeature(ctx.bodies[i].sourceFeature);
-        m_bodies[i]->setShape(ctx.bodies[i].name, ctx.bodies[i].shape);
-    }
+    m_resultFromCache = true;
 
     ++m_rebuildCount;
     one.start();
@@ -1250,6 +1324,16 @@ QVariantList FissionDocument::faceEdges(const QVariantMap &faceRef) const {
         if (!out.contains(r)) out.append(r);
     }
     return out;
+}
+
+bool FissionDocument::isPlanarFace(const QVariantMap &faceRef) const {
+    const int body = faceRef.value(QStringLiteral("body"), -1).toInt();
+    const TopoDS_Shape shape = displayShape(body);
+    if (shape.IsNull() || faceRef.value(QStringLiteral("kind")).toString() != QLatin1String("face")) return false;
+    const auto faces = GeomUtils::faceMap(shape);
+    const int fi = faceRef.value(QStringLiteral("index"), -1).toInt() + 1;
+    if (fi < 1 || fi > faces.Extent()) return false;
+    return BRepAdaptor_Surface(TopoDS::Face(faces(fi))).GetType() == GeomAbs_Plane;
 }
 
 QVariantMap FissionDocument::planeFrame(const QVariant &refArg) const {
@@ -1492,6 +1576,132 @@ QJsonObject FissionDocument::toJson() const {
     return obj;
 }
 
+void FissionDocument::adoptBodies(const QList<BodyState> &bodies) {
+    while (m_bodies.size() > bodies.size()) m_bodies.takeLast()->deleteLater();
+    while (m_bodies.size() < bodies.size()) {
+        auto *b = new FissionBody(this);
+        connect(b, &FissionBody::visibilityChanged, this, &FissionDocument::displayChanged);
+        connect(b, &FissionBody::appearanceChanged, this, [this] {
+            if (!m_restoring) setModified(true);
+            emit displayChanged();
+        });
+        m_bodies.append(b);
+    }
+    for (int i = 0; i < bodies.size(); ++i) {
+        m_bodies[i]->setSourceFeature(bodies[i].sourceFeature);
+        m_bodies[i]->setEditedBy(bodies[i].editedBy);
+        m_bodies[i]->setShape(bodies[i].name, bodies[i].shape);
+    }
+}
+
+QByteArray FissionDocument::geometryKey() const {
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(m_lengthUnit.toUtf8());
+    hash.addData(m_massUnit.toUtf8());
+    hash.addData(QByteArray::number(m_timeline->marker()));
+    for (auto *p : m_parameters)
+        hash.addData(QJsonDocument(p->toJson()).toJson(QJsonDocument::Compact));
+    for (auto *f : m_timeline->features())
+        hash.addData(QJsonDocument(f->toJson()).toJson(QJsonDocument::Compact));
+    return hash.result().toHex();
+}
+
+QJsonObject FissionDocument::resultCacheJson() const {
+    QJsonArray bodies;
+    QElapsedTimer clock;
+    clock.start();
+    for (auto *b : m_bodies) {
+        QString brep;
+        if (b && !b->shape().IsNull()) {
+            std::ostringstream os;
+            BRepTools::Write(b->shape(), os);
+            const std::string text = os.str();
+            const QByteArray raw(text.data(), int(text.size()));
+            brep = QString::fromLatin1(qCompress(raw, 6).toBase64());
+        }
+        bodies.append(QJsonObject{{QStringLiteral("name"), b->name()},
+                                  {QStringLiteral("sourceFeature"), b->sourceFeature()},
+                                  {QStringLiteral("editedBy"), b->editedBy()},
+                                  {QStringLiteral("brep"), brep}});
+        if (clock.elapsed() > 40) {
+            FissionProgress::report(QStringLiteral("save"), 0.2, QStringLiteral("Storing solids…"));
+            if (QCoreApplication::instance())
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+            clock.restart();
+        }
+    }
+    return QJsonObject{{QStringLiteral("key"), QString::fromLatin1(geometryKey())},
+                       {QStringLiteral("marker"), m_timeline->marker()},
+                       {QStringLiteral("bodies"), bodies}};
+}
+
+bool FissionDocument::restoreResultCache(const QJsonObject &cache) {
+    if (cache.isEmpty()) return false;
+    if (cache.value(QStringLiteral("key")).toString().toLatin1() != geometryKey()) return false;
+    const QJsonArray stored = cache.value(QStringLiteral("bodies")).toArray();
+    QList<BodyState> bodies;
+    bodies.reserve(stored.size());
+    QElapsedTimer clock;
+    clock.start();
+    for (int i = 0; i < stored.size(); ++i) {
+        const QJsonObject entry = stored.at(i).toObject();
+        BodyState state;
+        state.name = entry.value(QStringLiteral("name")).toString();
+        state.sourceFeature = entry.value(QStringLiteral("sourceFeature")).toString();
+        state.editedBy = entry.value(QStringLiteral("editedBy")).toString();
+        const QByteArray packed = QByteArray::fromBase64(entry.value(QStringLiteral("brep")).toString().toLatin1());
+        if (!packed.isEmpty()) {
+            const QByteArray raw = qUncompress(packed);
+            if (raw.isEmpty()) return false;
+            std::istringstream is(std::string(raw.constData(), size_t(raw.size())));
+            BRep_Builder builder;
+            try {
+                BRepTools::Read(state.shape, is, builder);
+            } catch (const Standard_Failure &) {
+                return false;
+            }
+            if (state.shape.IsNull()) return false;
+        }
+        bodies.append(state);
+        if (m_loading && clock.elapsed() > 40) {
+            FissionProgress::report(QStringLiteral("open"), 0.8,
+                                    QStringLiteral("Opening saved solids…"));
+            if (QCoreApplication::instance())
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+            clock.restart();
+        }
+    }
+    adoptBodies(bodies);
+    realizeLightweightFeatures();
+    m_resultFromCache = true;
+    emit bodiesChanged();
+    emit rebuilt();
+    emit displayChanged();
+    return true;
+}
+
+void FissionDocument::realizeLightweightFeatures() {
+    evaluateParameters();
+    RebuildContext ctx(this);
+    for (auto *b : m_bodies)
+        ctx.bodies.append({b->name(), b->shape(), b->sourceFeature(), b->editedBy()});
+    const auto &fs = m_timeline->features();
+    const int end = std::min<int>(fs.size(), m_timeline->marker());
+    for (int i = 0; i < end; ++i) {
+        FissionFeature *f = fs[i];
+        const bool light = qobject_cast<FissionSketch *>(f)
+            || qobject_cast<FissionConstructionPlane *>(f)
+            || qobject_cast<FissionConstructionAxis *>(f)
+            || qobject_cast<FissionConstructionPoint *>(f);
+        if (f->isSuppressed() || !light) {
+            if (!f->isSuppressed()) ctx.registerFeature(f);
+            continue;
+        }
+        ctx.featureIndex = i;
+        if (f->run(ctx)) ctx.registerFeature(f);
+    }
+}
+
 void FissionDocument::fromJson(const QJsonObject &obj) {
     const bool wasRestoring = m_restoring;
     m_restoring = true;
@@ -1525,16 +1735,28 @@ void FissionDocument::fromJson(const QJsonObject &obj) {
 
     const QJsonObject timeline = obj["timeline"].toObject();
     const QJsonArray features = timeline["features"].toArray();
+    int featureOrdinal = 0;
     for (const QJsonValue &v : features) {
         FissionFeature *f = FissionFeature::fromJson(v.toObject(), this);
         if (!f) continue;
         attachFeature(f);
         m_timeline->insert(m_timeline->count(), f);
+        if (m_loading && (++featureOrdinal % 12) == 0 && QCoreApplication::instance()) {
+            FissionProgress::report(QStringLiteral("open"), 0.66, QStringLiteral("Reading features…"));
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+        }
     }
-    m_timeline->setMarker(timeline["marker"].toInt(m_timeline->count()));
+    // The marker stored with the solid cache is where the file was saved, including mid-timeline.
+    const QJsonObject resultCache = obj.value(QStringLiteral("resultCache")).toObject();
+    int pinned = timeline["marker"].toInt(m_timeline->count());
+    if (resultCache.contains(QStringLiteral("marker")))
+        pinned = resultCache.value(QStringLiteral("marker")).toInt(pinned);
+    m_timeline->setMarker(std::clamp(pinned, 0, m_timeline->count()));
     m_restoring = wasRestoring;
 
-    rebuild();
+    // The file keeps the rebuilt solids. A matching key opens them; anything else replays the timeline.
+    if (!restoreResultCache(resultCache))
+        rebuild();
     const QJsonArray display = obj["bodyDisplay"].toArray();
     for (int i = 0; i < display.size() && i < m_bodies.size(); ++i) {
         const QJsonObject d = display[i].toObject();
@@ -1570,12 +1792,20 @@ void FissionDocument::fromJson(const QJsonObject &obj) {
     // Only replace when the object carries history (disk load). Undo checkpoints omit it so history stays.
     if (obj.contains(QStringLiteral("history")))
         m_history = obj.value(QStringLiteral("history")).toArray();
+    // Drawing bodies travel with the live file. Undo checkpoints and version snapshots omit them.
+    if (obj.contains(QStringLiteral("drawings")))
+        m_drawings = obj.value(QStringLiteral("drawings")).toArray();
+    else if (!wasRestoring)
+        m_drawings = {};
     emit parametersChanged();
 }
 
 bool FissionDocument::save(const QString &path) {
     ++m_versionNumber;
     emit versionNumberChanged();
+    // Leave the marker where the user put it. The cache is the model at that point,
+    // so features after the marker stay in the file and are not replayed on open.
+    syncModelToMarker();
 
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1616,7 +1846,11 @@ bool FissionDocument::save(const QString &path) {
         m_history.removeAt(0);
 
     QJsonObject root = toJson();
+    // Undo and version snapshots use toJson() and stay free of this blob. The file itself keeps it.
+    root.insert(QStringLiteral("resultCache"), resultCacheJson());
     root.insert(QStringLiteral("history"), m_history);
+    if (!m_drawings.isEmpty())
+        root.insert(QStringLiteral("drawings"), m_drawings);
     FissionProgress::report(QStringLiteral("save"), 0.35, QStringLiteral("Encoding…"));
     pump();
 
@@ -1945,7 +2179,12 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
 
     const QJsonArray tlArr = src["timeline"].toArray();
     if (!tlArr.isEmpty()) {
+        int timelineOrdinal = 0;
         for (const QJsonValue &tv : tlArr) {
+            if ((++timelineOrdinal % 24) == 0 && QCoreApplication::instance()) {
+                FissionProgress::report(QStringLiteral("open"), 0.55, QStringLiteral("Converting timeline…"));
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+            }
             const QJsonObject entry = tv.toObject();
             const int idx = entry["index"].toInt(-1);
             const QString rawType = entry["type"].toString();
@@ -2018,7 +2257,13 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
     // Fusion mesh bodies (not in STEP): one Insert Mesh each, after the B-rep snapshots so those don't
     // replace them. nodes = float32 x y z (mm), triangles = int32 node indices, both little-endian base64.
     int meshCount = 0;
-    for (const QJsonValue &mv : src["meshBodies"].toArray()) {
+    const QJsonArray meshBodies = src["meshBodies"].toArray();
+    for (const QJsonValue &mv : meshBodies) {
+        if (QCoreApplication::instance() && meshBodies.size() > 1) {
+            FissionProgress::report(QStringLiteral("open"), 0.60,
+                                    QStringLiteral("Reading mesh %1 of %2").arg(meshCount + 1).arg(meshBodies.size()));
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+        }
         const QJsonObject mb = mv.toObject();
         const QByteArray nodes = QByteArray::fromBase64(mb["nodes"].toString().toLatin1());
         const QByteArray tris = QByteArray::fromBase64(mb["triangles"].toString().toLatin1());
@@ -2059,7 +2304,10 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
 
     QJsonObject tlObj;
     tlObj["features"] = tlFeatures;
-    tlObj["marker"] = tlFeatures.size();
+    int pinned = src.value(QStringLiteral("timelineMarker")).toInt(tlFeatures.size());
+    if (!src.contains(QStringLiteral("timelineMarker")))
+        pinned = src.value(QStringLiteral("metadata")).toObject().value(QStringLiteral("timelineMarker")).toInt(tlFeatures.size());
+    tlObj["marker"] = std::clamp(pinned, 0, int(tlFeatures.size()));
     dst["timeline"] = tlObj;
     // Do NOT copy fusionTimeline/fusionFeatures — they duplicate ~100MB+ of stepData and OOM on open
 
@@ -2109,13 +2357,26 @@ bool FissionDocument::load(const QString &path) {
         m_lastError = file.errorString();
         return false;
     }
+    m_loading = true;
+    FissionProgress::begin(QStringLiteral("open"), QStringLiteral("Opening…"));
+    const auto endOpen = qScopeGuard([this] {
+        m_loading = false;
+        FissionProgress::end(QStringLiteral("open"));
+    });
+    auto pump = [](double fraction, const QString &label) {
+        FissionProgress::report(QStringLiteral("open"), fraction, label);
+        if (QCoreApplication::instance())
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+    };
     QJsonParseError perr;
     QJsonDocument doc;
     QJsonObject root;
     QByteArray thumbB64;
     try {
+        pump(0.08, QStringLiteral("Reading…"));
         const QByteArray bytes = file.readAll();
         file.close();
+        pump(0.28, QStringLiteral("Reading…"));
         doc = QJsonDocument::fromJson(bytes, &perr);
         if (doc.isNull()) {
             m_lastError = perr.errorString();
@@ -2125,12 +2386,16 @@ bool FissionDocument::load(const QString &path) {
         thumbB64 = root.value(QStringLiteral("thumbnail")).toString().toLatin1();
         // Fusion bulk exporter writes document/metadata (often also format:Fission360)
         if (root.contains(QStringLiteral("document")) || root.contains(QStringLiteral("metadata"))) {
+            pump(0.48, QStringLiteral("Converting timeline…"));
             root = convertFromFusionExport(root);
             doc = QJsonDocument();   // drop the raw export tree before rebuild (frees duplicated stepData)
         } else if (root.value(QStringLiteral("format")).toString() != QStringLiteral("Fission360")) {
             m_lastError = QStringLiteral("Not a Fission 360 document");
             return false;
         }
+        pump(0.68, root.contains(QStringLiteral("resultCache"))
+                       ? QStringLiteral("Opening saved solids…")
+                       : QStringLiteral("Rebuilding…"));
         fromJson(root);
         // Fold legacy sidecar history into the in-memory document (written into the .f360 on next Save)
         if (DocumentVersionStore::migrateSidecarInto(path, m_history,
@@ -2158,6 +2423,7 @@ bool FissionDocument::load(const QString &path) {
         break;
     }
     Q_UNUSED(importedStep);
+    pump(0.94, QStringLiteral("Finishing…"));
     QByteArray thumb = QByteArray::fromBase64(root["thumbnail"].toString().toLatin1());
     if (thumb.isEmpty())
         thumb = QByteArray::fromBase64(thumbB64);

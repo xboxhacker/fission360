@@ -3,6 +3,7 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QJsonArray>
 #include <QVariantMap>
 #include <QQmlEngine>
 #include "DrawingDocument.h"
@@ -27,6 +28,11 @@ public:
     Q_INVOKABLE DrawingDocument *drawing(int index) const;
     Q_INVOKABLE DrawingDocument *drawingById(const QString &id) const;
     Q_INVOKABLE bool removeDrawing(const QString &id);
+
+    // Drawings whose referenced design is designId (empty id includes every open drawing).
+    QJsonArray toJsonForDesign(const QString &designId) const;
+    // Replace drawings that share an id. Entries without an id are skipped.
+    void restoreFromJson(const QJsonArray &drawings);
 
     // Project the active design onto a view (base / projected / section / detail / auxiliary).
     Q_INVOKABLE bool projectView(DrawingView *view, FissionDocument *design, DrawingDocument *drawingDoc = nullptr);

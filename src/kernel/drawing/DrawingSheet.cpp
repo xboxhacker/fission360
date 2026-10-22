@@ -2,6 +2,7 @@
 // Copyright (C) FissionCAD contributors
 #include "DrawingSheet.h"
 #include <QDate>
+#include <QJsonArray>
 #include <QUuid>
 
 DrawingSheet::DrawingSheet(const QString &id, const QString &name,
@@ -33,6 +34,14 @@ void DrawingSheet::setScale(double scale)
     if (qFuzzyCompare(m_scale, scale)) return;
     m_scale = scale;
     emit scaleChanged();
+}
+
+QList<QObject *> DrawingSheet::views() const
+{
+    QList<QObject *> out;
+    out.reserve(m_views.size());
+    for (DrawingView *v : m_views) out.append(v);
+    return out;
 }
 
 DrawingView *DrawingSheet::view(int index) const
@@ -123,6 +132,28 @@ QString DrawingSheet::addAnnotation(const QVariantMap &ann)
     return a.value("id").toString();
 }
 
+bool DrawingSheet::updateAnnotation(const QString &id, const QVariantMap &fields)
+{
+    if (id.isEmpty()) return false;
+    for (int i = 0; i < m_annotations.size(); ++i) {
+        QVariantMap a = m_annotations[i].toMap();
+        if (a.value(QStringLiteral("id")).toString() != id) continue;
+        bool changed = false;
+        for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+            if (it.key() == QLatin1String("id") || it.key() == QLatin1String("kind")) continue;
+            if (a.value(it.key()) == it.value()) continue;
+            a.insert(it.key(), it.value());
+            changed = true;
+        }
+        if (changed) {
+            m_annotations[i] = a;
+            emit annotationsChanged();
+        }
+        return true;
+    }
+    return false;
+}
+
 bool DrawingSheet::removeAnnotation(const QString &id)
 {
     for (int i = 0; i < m_annotations.size(); ++i) {
@@ -196,4 +227,71 @@ void DrawingSheet::setDate(const QString &v)
 void DrawingSheet::setPartName(const QString &v)
 {
     if (m_partName != v) { m_partName = v; emit titleBlockChanged(); }
+}
+
+QJsonObject DrawingSheet::toJson() const
+{
+    QJsonArray views;
+    for (DrawingView *v : m_views)
+        if (v) views.append(v->toJson());
+    QJsonArray sketches;
+    for (DrawingSketch *s : m_sketches)
+        if (s) sketches.append(s->toJson());
+    return QJsonObject{
+        {QStringLiteral("id"), m_id},
+        {QStringLiteral("name"), m_name},
+        {QStringLiteral("size"), m_size},
+        {QStringLiteral("width"), m_width},
+        {QStringLiteral("height"), m_height},
+        {QStringLiteral("orientation"), m_orientation},
+        {QStringLiteral("scale"), m_scale},
+        {QStringLiteral("titleBlock"), m_titleBlock},
+        {QStringLiteral("title"), m_title},
+        {QStringLiteral("drawnBy"), m_drawnBy},
+        {QStringLiteral("revision"), m_revision},
+        {QStringLiteral("material"), m_material},
+        {QStringLiteral("date"), m_date},
+        {QStringLiteral("partName"), m_partName},
+        {QStringLiteral("views"), views},
+        {QStringLiteral("sketches"), sketches},
+        {QStringLiteral("annotations"), QJsonArray::fromVariantList(m_annotations)},
+        {QStringLiteral("tables"), QJsonArray::fromVariantList(m_tables)},
+    };
+}
+
+DrawingSheet *DrawingSheet::fromJson(const QJsonObject &obj, QObject *parent)
+{
+    const QString id = obj.value(QStringLiteral("id")).toString();
+    if (id.isEmpty()) return nullptr;
+    const double width = obj.value(QStringLiteral("width")).toDouble();
+    const double height = obj.value(QStringLiteral("height")).toDouble();
+    auto *sheet = new DrawingSheet(id,
+                                   obj.value(QStringLiteral("name")).toString(QStringLiteral("Sheet")),
+                                   obj.value(QStringLiteral("size")).toString(QStringLiteral("A3")),
+                                   width > 0 ? width : 420.0,
+                                   height > 0 ? height : 297.0,
+                                   obj.value(QStringLiteral("orientation")).toString(QStringLiteral("landscape")),
+                                   obj.value(QStringLiteral("scale")).toDouble(1.0) > 0
+                                       ? obj.value(QStringLiteral("scale")).toDouble(1.0) : 1.0,
+                                   parent);
+    sheet->setTitleBlockName(obj.value(QStringLiteral("titleBlock")).toString(sheet->titleBlockName()));
+    sheet->setTitle(obj.value(QStringLiteral("title")).toString());
+    sheet->setDrawnBy(obj.value(QStringLiteral("drawnBy")).toString());
+    if (obj.contains(QStringLiteral("revision")))
+        sheet->setRevision(obj.value(QStringLiteral("revision")).toString());
+    sheet->setMaterial(obj.value(QStringLiteral("material")).toString());
+    if (obj.contains(QStringLiteral("date")))
+        sheet->setDate(obj.value(QStringLiteral("date")).toString());
+    sheet->setPartName(obj.value(QStringLiteral("partName")).toString());
+    for (const QJsonValue &v : obj.value(QStringLiteral("views")).toArray()) {
+        if (DrawingView *view = DrawingView::fromJson(v.toObject(), sheet))
+            sheet->m_views.append(view);
+    }
+    for (const QJsonValue &v : obj.value(QStringLiteral("sketches")).toArray()) {
+        if (DrawingSketch *sk = DrawingSketch::fromJson(v.toObject(), sheet))
+            sheet->m_sketches.append(sk);
+    }
+    sheet->m_annotations = obj.value(QStringLiteral("annotations")).toArray().toVariantList();
+    sheet->m_tables = obj.value(QStringLiteral("tables")).toArray().toVariantList();
+    return sheet;
 }

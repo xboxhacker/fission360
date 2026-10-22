@@ -75,13 +75,17 @@ Rectangle {
         Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 18; color: "#5a626b" }
         ToolbarButton {
             compact: true; glyph: "undo"; glyphColor: Theme.headerText; tip: "Undo (Ctrl+Z)"
-            enabled: bar.app.doc && bar.app.doc.canUndo
-            onClicked: bar.app.doc.undo()
+            enabled: bar.app.inDrawing
+                     ? (bar.app.activeDrawing && bar.app.activeDrawing.canUndo)
+                     : (bar.app.doc && bar.app.doc.canUndo)
+            onClicked: bar.app.editUndo()
         }
         ToolbarButton {
             compact: true; glyph: "redo"; glyphColor: Theme.headerText; tip: "Redo (Ctrl+Y)"
-            enabled: bar.app.doc && bar.app.doc.canRedo
-            onClicked: bar.app.doc.redo()
+            enabled: bar.app.inDrawing
+                     ? (bar.app.activeDrawing && bar.app.activeDrawing.canRedo)
+                     : (bar.app.doc && bar.app.doc.canRedo)
+            onClicked: bar.app.editRedo()
         }
 
         Item { Layout.preferredWidth: 10 }

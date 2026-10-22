@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QJsonObject>
 #include <QVariantMap>
 #include <QVariantList>
 #include <QQmlEngine>
@@ -23,6 +24,7 @@ class DrawingSheet : public QObject {
     Q_PROPERTY(QString orientation READ orientation CONSTANT)
     Q_PROPERTY(double scale READ scale WRITE setScale NOTIFY scaleChanged)
     Q_PROPERTY(int viewCount READ viewCount NOTIFY viewsChanged)
+    Q_PROPERTY(QList<QObject *> views READ views NOTIFY viewsChanged)
     Q_PROPERTY(int sketchCount READ sketchCount NOTIFY sketchesChanged)
     Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
     Q_PROPERTY(int tableCount READ tableCount NOTIFY tablesChanged)
@@ -51,6 +53,7 @@ public:
     void setScale(double scale);
 
     int viewCount() const { return m_views.size(); }
+    QList<QObject *> views() const;
     Q_INVOKABLE DrawingView *view(int index) const;
     Q_INVOKABLE DrawingView *viewById(const QString &id) const;
     Q_INVOKABLE DrawingView *addView(const QString &type, const QVariantMap &options);
@@ -64,6 +67,8 @@ public:
     int annotationCount() const { return m_annotations.size(); }
     Q_INVOKABLE QVariantMap annotation(int index) const;
     Q_INVOKABLE QString addAnnotation(const QVariantMap &ann);
+    // Merge fields into the annotation with this id. id and kind stay put. Returns false when id is missing.
+    Q_INVOKABLE bool updateAnnotation(const QString &id, const QVariantMap &fields);
     Q_INVOKABLE bool removeAnnotation(const QString &id);
     Q_INVOKABLE QVariantList annotations() const { return m_annotations; }
 
@@ -88,6 +93,9 @@ public:
     void setDate(const QString &v);
     QString partName() const { return m_partName; }
     void setPartName(const QString &v);
+
+    QJsonObject toJson() const;
+    static DrawingSheet *fromJson(const QJsonObject &obj, QObject *parent = nullptr);
 
 signals:
     void nameChanged();

@@ -9,10 +9,71 @@ import "."
 Rectangle {
     id: panel
     property var app
+    property string selectedId: ""
     readonly property var timeline: app.doc ? app.doc.timeline : null
     readonly property int itemWidth: 34
     implicitHeight: 46
     color: Theme.panel
+
+    // Wheel moves the marker several features at a time. Shift+wheel only slides the strip.
+    function revealIndex(i) {
+        if (!panel.timeline || i < 0) return
+        const x = i * (panel.itemWidth + 2)
+        if (x < flick.contentX + 12)
+            flick.contentX = Math.max(0, x - 12)
+        else if (x + panel.itemWidth > flick.contentX + flick.width - 12)
+            flick.contentX = Math.max(0, x + panel.itemWidth - flick.width + 24)
+    }
+    function featureIdForPick(it) {
+        if (!it || !panel.app || !panel.app.doc) return ""
+        const k = it.kind
+        if (k === "sketchcurve" || k === "profile") return it.sketch || ""
+        if (k === "plane" || k === "axis" || k === "point" || k === "feature") return it.id || ""
+        if (k === "face" || k === "edge" || k === "body") {
+            const b = panel.app.doc.body(it.body)
+            if (!b) return ""
+            return b.editedBy && b.editedBy.length ? b.editedBy : (b.sourceFeature || "")
+        }
+        return ""
+    }
+    function highlightFeature(id) {
+        panel.selectedId = id || ""
+        if (!panel.timeline || !panel.selectedId.length) return
+        const i = panel.timeline.indexOfId(panel.selectedId)
+        if (i >= 0) panel.revealIndex(i)
+    }
+
+    WheelHandler {
+        onWheel: (event) => {
+            if (!panel.timeline) return
+            let dy = event.angleDelta.y
+            if (dy === 0) dy = event.pixelDelta.y
+            if (dy === 0) return
+            const jump = (event.modifiers & Qt.ControlModifier) ? 1 : 8
+            const steps = Math.round((-dy / 120) * jump)
+            if (steps === 0) return
+            if (event.modifiers & Qt.ShiftModifier) {
+                const limit = Math.max(0, flick.contentWidth - flick.width)
+                flick.contentX = Math.max(0, Math.min(limit, flick.contentX + steps * (panel.itemWidth + 2)))
+            } else {
+                const next = Math.max(0, Math.min(panel.timeline.count, panel.timeline.marker + steps))
+                if (next !== panel.timeline.marker) panel.timeline.marker = next
+                panel.revealIndex(next)
+            }
+        }
+    }
+    Connections {
+        target: panel.timeline
+        function onMarkerChanged() { if (panel.timeline) panel.revealIndex(panel.timeline.marker) }
+    }
+    Connections {
+        target: panel.app ? panel.app.selection : null
+        function onSelectionChanged() {
+            const sel = panel.app.selection
+            if (!sel || sel.count < 1) { panel.selectedId = ""; return }
+            panel.highlightFeature(panel.featureIdForPick(sel.items[sel.count - 1]))
+        }
+    }
 
     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
@@ -59,11 +120,13 @@ Rectangle {
                         required property bool active
                         required property int index
                         readonly property bool editing: feature && (feature.id === panel.app.commandFeatureId || feature.id === panel.app.activeSketchId)
+                        readonly property bool picked: feature && feature.id === panel.selectedId
                         width: panel.itemWidth
                         height: 34
                         radius: 3
-                        color: editing ? Theme.accentLight : chipArea.containsMouse ? Theme.hover : "transparent"
-                        border.color: error.length ? Theme.error : editing ? Theme.accent : "transparent"
+                        color: editing || picked ? Theme.accentLight : chipArea.containsMouse ? Theme.hover : "transparent"
+                        border.width: picked ? 2 : 1
+                        border.color: error.length ? Theme.error : (editing || picked) ? Theme.accent : "transparent"
                         opacity: active ? 1 : 0.38
 
                         Glyph {
@@ -90,9 +153,11 @@ Rectangle {
                             id: chipArea
                             anchors.fill: parent
                             hoverEnabled: true
+                            pressDelay: 140
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             onClicked: (m) => {
                                 if (m.button === Qt.RightButton) menu.openFor(chip.feature, chip.index)
+                                else panel.highlightFeature(chip.feature ? chip.feature.id : "")
                             }
                             onDoubleClicked: panel.app.editFeature(chip.feature)
                         }

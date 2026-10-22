@@ -4,10 +4,14 @@
 #include "kernel/FissionSketch.h"
 #include "kernel/FissionConstruction.h"
 #include "kernel/GeomUtils.h"
+#include "kernel/FissionProgress.h"
 #include "kernel/MeshUtils.h"
 #include "kernel/render/HdrImage.h"
 
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QScopeGuard>
 #include <QImage>
 #include <QOpenGLBuffer>
 #include <QOpenGLExtraFunctions>
@@ -772,6 +776,8 @@ void BRepRenderer::addFace(const TopoDS_Shape &shape, const PickTag &tag, const 
                 m.pos << p;
                 m.nrm << fn;
             }
+            if ((t & 32767) == 0)
+                pumpDisplay(QStringLiteral("Showing mesh…"), 0.45);
         }
         m_faces.append(m);
         return;
@@ -870,6 +876,8 @@ void BRepRenderer::addMeshWire(const TopoDS_Shape &shape, const PickTag &tag) {
                 if (uses[key]++) continue;
                 pl.pts << toQt(tri->Node(a).Transformed(trsf)) << toQt(tri->Node(b).Transformed(trsf));
             }
+            if ((t & 32767) == 0)
+                pumpDisplay(QStringLiteral("Mesh edges…"), 0.8);
         }
         for (auto it = uses.cbegin(); it != uses.cend(); ++it)
             if (it.value() == 1) {
@@ -881,7 +889,32 @@ void BRepRenderer::addMeshWire(const TopoDS_Shape &shape, const PickTag &tag) {
     }
 }
 
+void BRepRenderer::pumpDisplay(const QString &label, double fraction) {
+    if (!m_streamDisplay) return;
+    if (m_uiPump.isValid() && m_uiPump.elapsed() < 40) return;
+    FissionProgress::report(QStringLiteral("viewport"), fraction, label);
+    m_uiPump.restart();
+    if (QCoreApplication::instance())
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+}
+
 void BRepRenderer::tessellate() {
+    if (m_inTessellate) {
+        m_tessellateAgain = true;
+        return;
+    }
+    m_inTessellate = true;
+    m_tessellateTimer.stop();
+    const auto leave = qScopeGuard([this] {
+        if (m_streamDisplay)
+            FissionProgress::end(QStringLiteral("viewport"));
+        m_streamDisplay = false;
+        m_inTessellate = false;
+        if (m_tessellateAgain) {
+            m_tessellateAgain = false;
+            QTimer::singleShot(0, this, [this] { tessellate(); });
+        }
+    });
     QElapsedTimer timer;
     timer.start();
     m_faces.clear();
@@ -892,6 +925,18 @@ void BRepRenderer::tessellate() {
     m_hasBounds = false;
 
     if (m_doc) {
+        bool heavy = m_doc->displayBodyCount() >= 4;
+        if (!heavy) {
+            for (int i = 0; i < m_doc->displayBodyCount() && !heavy; ++i)
+                heavy = MeshUtils::isMesh(m_doc->displayShape(i));
+        }
+        if (heavy) {
+            m_streamDisplay = true;
+            FissionProgress::begin(QStringLiteral("viewport"), QStringLiteral("Showing model…"));
+            if (QCoreApplication::instance())
+                QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 8);
+            m_uiPump.start();
+        }
         Bnd_Box all;
         const auto bodies = m_doc->bodies();
         const auto overlays = m_doc->overlayFeatures();
@@ -960,6 +1005,8 @@ void BRepRenderer::tessellate() {
         // Unchanged bodies reuse their display geometry: rebuilding it for a big body takes seconds
         const bool curvature = m_analysis == "curvature";
         QSet<const void *> usedKeys;
+        struct WireJob { TopoDS_Shape shape; PickTag tag; const void *key; };
+        QVector<WireJob> wireJobs;
         for (int i = 0; i < m_doc->displayBodyCount(); ++i) {
             const TopoDS_Shape shape = m_doc->displayShape(i);
             if (!bodyVisible(i) || shape.IsNull()) continue;
@@ -1016,9 +1063,10 @@ void BRepRenderer::tessellate() {
                     m_faces.last().metalness = fmtal;
                 }
             }
-            if (MeshUtils::isMesh(shape)) {
-                if (!input) addMeshWire(shape, {PickTag::Preview, i, -1});
-            } else {
+            const bool deferWire = MeshUtils::isMesh(shape) && !input;
+            if (deferWire)
+                wireJobs.append(WireJob{shape, PickTag{PickTag::Preview, i, -1}, key});
+            else if (!MeshUtils::isMesh(shape)) {
                 const TopTools_IndexedMapOfShape edges = GeomUtils::edgeMap(shape);
                 for (int k = 1; k <= edges.Extent(); ++k)
                     addEdge(edges(k), {PickTag::BodyEdge, i, k - 1}, kEdgeColor, false, defl);
@@ -1026,9 +1074,26 @@ void BRepRenderer::tessellate() {
             for (int k = f0; k < m_faces.size(); ++k) buildChunks(m_faces[k]);
             for (int k = p0; k < m_polylines.size(); ++k) buildChunks(m_polylines[k]);
             m_bodyCache.insert(key, {shape, curvature, input, m_faces.mid(f0), m_polylines.mid(p0)});
+            pumpDisplay(b ? b->name() : QStringLiteral("Showing model…"),
+                        0.15 + 0.55 * double(i + 1) / double(std::max(1, m_doc->displayBodyCount())));
         }
         for (auto it = m_bodyCache.begin(); it != m_bodyCache.end();)
             it = usedKeys.contains(it.key()) ? std::next(it) : m_bodyCache.erase(it);
+
+        // Shaded faces go up before mesh edge extraction, which walks every triangle.
+        if (!wireJobs.isEmpty() && m_streamDisplay) {
+            assemble();
+            pumpDisplay(QStringLiteral("Mesh edges…"), 0.72);
+        }
+        for (const WireJob &job : wireJobs) {
+            const int p0 = m_polylines.size();
+            addMeshWire(job.shape, job.tag);
+            for (int k = p0; k < m_polylines.size(); ++k) buildChunks(m_polylines[k]);
+            auto cached = m_bodyCache.find(job.key);
+            if (cached != m_bodyCache.end())
+                for (int k = p0; k < m_polylines.size(); ++k) cached->lines.append(m_polylines[k]);
+            pumpDisplay(QStringLiteral("Mesh edges…"), 0.86);
+        }
 
         for (FissionFeature *f : overlays) {
             const int oi = m_overlayIds.size();
@@ -1112,7 +1177,8 @@ void BRepRenderer::buildChunks(FaceMesh &m) {
     constexpr int kTris = 128;
     m.chunks.clear();
     const int n = int(m.tris.size()) / 3;
-    if (n > kTris) {
+    // A Morton reorder of a huge mesh holds the window on a sort. File order still picks correctly.
+    if (n > kTris && n <= 80000) {
         // Triangles in file order (STL) are scattered; Morton order keeps each chunk's box small
         QVector3D lo = m.pos[m.tris[0]], hi = lo;
         for (const QVector3D &p : std::as_const(m.pos)) {

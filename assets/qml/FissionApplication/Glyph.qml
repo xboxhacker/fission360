@@ -27,6 +27,8 @@ Item {
         anchors.fill: parent
         visible: !glyph.brand
         antialiasing: true
+        renderTarget: Canvas.FramebufferObject
+        renderStrategy: Canvas.Cooperative
 
         onPaint: {
             if (glyph.brand) return
@@ -591,8 +593,10 @@ Item {
             break
         }
         case "insertmesh":
+            // Pyramid plus an arrow that points down (insert). Y grows downward on this 24px grid.
+            // Toolbar INSERT Mesh, MESH Insert Mesh, and the timeline InsertMesh row all use this glyph.
             poly(c, [[3, 20], [9, 9], [17, 20]], true, true); poly(c, [[9, 9], [21, 13], [17, 20]], false, false)
-            poly(c, [[17, 9], [17, 2]], false, false); poly(c, [[14, 5], [17, 2], [20, 5]], false, false)
+            poly(c, [[17, 1], [17, 8]], false, false); poly(c, [[14, 5], [17, 8], [20, 5]], false, false)
             break
         case "tomesh":
             box(c, 2, 9, 8, 8, 3)

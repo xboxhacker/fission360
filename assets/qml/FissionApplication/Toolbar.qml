@@ -424,19 +424,14 @@ Rectangle {
                     if (app.drawingWorkspace) app.drawingWorkspace.beginProjectMode()
                 }, "Shift+drag from a parent view toward the projection (Fusion-style)"),
                 act("Section View", "section", () => {
-                    if (!app.drawingWorkspace || !app.drawingWorkspace.selectedView) {
-                        fissionApp.showMessage("Select a parent view first"); return
-                    }
-                    app.drawingWorkspace.activeTool = "sectionView"
-                    fissionApp.showMessage("Click the sheet to place a section view")
-                }, "Place a section view from the selected parent"),
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginSectionMode()
+                }, "Drag a cut line across the selected parent view"),
                 act("Detail View", "circle", () => {
-                    if (!app.drawingWorkspace || !app.drawingWorkspace.selectedView) {
-                        fissionApp.showMessage("Select a parent view first"); return
-                    }
-                    app.drawingWorkspace.activeTool = "detailView"
-                    fissionApp.showMessage("Click the sheet to place a detail view")
-                }, "Place a detail view from the selected parent"),
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginDetailMode()
+                }, "Drag a circle on the selected parent view"),
+                act("Aux View", "planeoffset", () => {
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginAuxMode()
+                }, "Place an auxiliary view from the selected parent"),
                 act("Iso View", "plane", () => {
                     if (app.drawingWorkspace) app.drawingWorkspace.beginBaseView("isometric")
                 }, "Place an isometric base view"),
@@ -449,22 +444,16 @@ Rectangle {
             ] },
             { title: "ANNOTATE", quick: 3, items: [
                 act("Dimension", "measure", () => {
-                    if (app.drawingWorkspace) {
-                        app.drawingWorkspace.activeTool = "dimension"
-                        fissionApp.showMessage("Drag on the sheet to place a dimension")
-                    }
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginDimensionMode()
                 }, "Drag on the sheet to place a linear dimension"),
                 act("Text", "script", () => {
-                    if (app.drawingWorkspace) app.drawingWorkspace.activeTool = "text"
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginTextMode()
                 }, "Click to place a text note"),
                 act("Hole Note", "hole", () => {
-                    if (app.drawingWorkspace) {
-                        app.drawingWorkspace.activeTool = "text"
-                        fissionApp.showMessage("Click to place a hole note")
-                    }
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginHoleNoteMode()
                 }, "Place a hole / callout note"),
                 act("Center Mark", "circle", () => {
-                    if (app.drawingWorkspace) app.drawingWorkspace.activeTool = "centerMark"
+                    if (app.drawingWorkspace) app.drawingWorkspace.beginCenterMarkMode()
                 }, "Click to place a center mark"),
                 act("Image", "export", () => app.drawingWorkspace && app.drawingWorkspace.insertImage(),
                     "Insert a raster image on the sheet")
@@ -483,7 +472,11 @@ Rectangle {
                 act("PNG", "export", () => app.drawingWorkspace && app.drawingWorkspace.exportPng(), "Export the sheet to PNG"),
                 act("TIFF", "export", () => app.drawingWorkspace && app.drawingWorkspace.exportTiff(), "Export the sheet to TIFF")
             ] },
-            { title: "SHEET", quick: 1, items: [
+            { title: "SHEET", quick: 3, items: [
+                act("Tidy Up", "finish", () => app.drawingWorkspace && app.drawingWorkspace.tidyUp(),
+                    "Arrange the views on the sheet"),
+                act("Hidden Lines", "section", () => app.drawingWorkspace && app.drawingWorkspace.toggleHiddenLines(),
+                    "Toggle hidden lines for new views and the selected view"),
                 act("Back to Design", "finish", () => app.leaveDrawing(), "Leave the drawing and return to the design")
             ] }
         ]

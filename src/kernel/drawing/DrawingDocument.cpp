@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "DrawingDocument.h"
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QMap>
 #include <QSizeF>
 #include <QUuid>
@@ -101,6 +103,95 @@ void DrawingDocument::pushHistory(const QString &entry)
     emit historyChanged();
 }
 
+void DrawingDocument::pushUndoSnapshot()
+{
+    const QByteArray bytes = QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
+    if (!m_undo.isEmpty() && m_undo.last() == bytes) return;
+    m_undo.append(bytes);
+    while (m_undo.size() > 40) m_undo.removeFirst();
+    if (!m_redo.isEmpty()) m_redo.clear();
+    emit undoChanged();
+}
+
+void DrawingDocument::beginEdit()
+{
+    if (m_applying) return;
+    if (m_editDepth++ == 0) pushUndoSnapshot();
+}
+
+void DrawingDocument::endEdit()
+{
+    if (m_editDepth > 0) --m_editDepth;
+}
+
+bool DrawingDocument::applySnapshot(const QByteArray &bytes)
+{
+    const QJsonObject obj = QJsonDocument::fromJson(bytes).object();
+    if (obj.value(QStringLiteral("id")).toString() != m_id) return false;
+    QList<DrawingSheet *> next;
+    for (const QJsonValue &v : obj.value(QStringLiteral("sheets")).toArray()) {
+        if (DrawingSheet *sheet = DrawingSheet::fromJson(v.toObject(), this))
+            next.append(sheet);
+    }
+    const QJsonArray sheetJson = obj.value(QStringLiteral("sheets")).toArray();
+    if (next.isEmpty() && !sheetJson.isEmpty()) {
+        qDeleteAll(next);
+        return false;
+    }
+
+    m_applying = true;
+    const QList<DrawingSheet *> old = m_sheets;
+    m_sheets = next;
+    if (!m_sheets.isEmpty())
+        m_activeSheet = std::clamp(obj.value(QStringLiteral("activeSheet")).toInt(0), 0, int(m_sheets.size()) - 1);
+    else
+        m_activeSheet = 0;
+    const QString name = obj.value(QStringLiteral("name")).toString(m_name);
+    if (m_name != name) m_name = name;
+    if (obj.contains(QStringLiteral("sourceDesignRevision")))
+        m_sourceRevision = obj.value(QStringLiteral("sourceDesignRevision")).toVariant().toLongLong();
+    m_history.clear();
+    for (const QJsonValue &v : obj.value(QStringLiteral("history")).toArray()) {
+        const QString entry = v.toString();
+        if (!entry.isEmpty()) m_history.append(entry);
+    }
+    emit sheetsChanged();
+    emit activeSheetChanged();
+    emit nameChanged();
+    emit historyChanged();
+    emit syncChanged();
+    for (DrawingSheet *sheet : old) sheet->deleteLater();
+    m_applying = false;
+    return true;
+}
+
+bool DrawingDocument::undo()
+{
+    if (m_undo.isEmpty() || m_applying || m_editDepth > 0) return false;
+    const QByteArray current = QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
+    QByteArray snap = m_undo.takeLast();
+    while (!m_undo.isEmpty() && snap == current) snap = m_undo.takeLast();
+    m_redo.append(current);
+    while (m_redo.size() > 40) m_redo.removeFirst();
+    const bool ok = applySnapshot(snap);
+    if (!ok) m_undo.append(snap);
+    emit undoChanged();
+    return ok;
+}
+
+bool DrawingDocument::redo()
+{
+    if (m_redo.isEmpty() || m_applying || m_editDepth > 0) return false;
+    const QByteArray current = QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
+    const QByteArray snap = m_redo.takeLast();
+    m_undo.append(current);
+    while (m_undo.size() > 40) m_undo.removeFirst();
+    const bool ok = applySnapshot(snap);
+    if (!ok) m_redo.append(snap);
+    emit undoChanged();
+    return ok;
+}
+
 void DrawingDocument::setSourceDesignRevision(qint64 rev)
 {
     if (m_sourceRevision == rev && !m_outOfDate) return;
@@ -115,4 +206,51 @@ void DrawingDocument::refreshOutOfDate(qint64 designContentRevision)
     if (m_outOfDate == stale) return;
     m_outOfDate = stale;
     emit syncChanged();
+}
+
+QJsonObject DrawingDocument::toJson() const
+{
+    QJsonArray sheets;
+    for (DrawingSheet *s : m_sheets)
+        if (s) sheets.append(s->toJson());
+    QJsonArray history;
+    for (const QString &entry : m_history) history.append(entry);
+    return QJsonObject{
+        {QStringLiteral("id"), m_id},
+        {QStringLiteral("name"), m_name},
+        {QStringLiteral("designId"), m_designId},
+        {QStringLiteral("sourceDesignRevision"), m_sourceRevision},
+        {QStringLiteral("standard"), m_standard},
+        {QStringLiteral("projectionAngle"), m_projectionAngle},
+        {QStringLiteral("activeSheet"), m_activeSheet},
+        {QStringLiteral("history"), history},
+        {QStringLiteral("sheets"), sheets},
+    };
+}
+
+DrawingDocument *DrawingDocument::fromJson(const QJsonObject &obj, QObject *parent)
+{
+    const QString id = obj.value(QStringLiteral("id")).toString();
+    if (id.isEmpty()) return nullptr;
+    auto *doc = new DrawingDocument(id,
+                                   obj.value(QStringLiteral("name")).toString(QStringLiteral("Drawing")),
+                                   obj.value(QStringLiteral("designId")).toString(),
+                                   obj.value(QStringLiteral("standard")).toString(QStringLiteral("ISO")),
+                                   obj.value(QStringLiteral("projectionAngle")).toString(QStringLiteral("third")),
+                                   parent);
+    if (obj.contains(QStringLiteral("sourceDesignRevision")))
+        doc->setSourceDesignRevision(obj.value(QStringLiteral("sourceDesignRevision")).toVariant().toLongLong());
+    for (const QJsonValue &v : obj.value(QStringLiteral("sheets")).toArray()) {
+        if (DrawingSheet *sheet = DrawingSheet::fromJson(v.toObject(), doc))
+            doc->m_sheets.append(sheet);
+    }
+    if (!doc->m_sheets.isEmpty()) {
+        const int active = obj.value(QStringLiteral("activeSheet")).toInt(0);
+        doc->m_activeSheet = std::clamp(active, 0, int(doc->m_sheets.size()) - 1);
+    }
+    for (const QJsonValue &v : obj.value(QStringLiteral("history")).toArray()) {
+        const QString entry = v.toString();
+        if (!entry.isEmpty()) doc->m_history.append(entry);
+    }
+    return doc;
 }

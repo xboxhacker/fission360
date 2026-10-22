@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "DrawingSketch.h"
+#include <QJsonArray>
 #include <QUuid>
 
 DrawingSketch::DrawingSketch(const QString &id, const QString &name, QObject *parent)
@@ -83,6 +84,38 @@ QString DrawingSketch::addText(double x, double y, const QString &text, double f
     m_curves.append({id, "text", p});
     emit curvesChanged();
     return id;
+}
+
+QJsonObject DrawingSketch::toJson() const
+{
+    QJsonArray curves;
+    for (const Curve &c : m_curves) {
+        QJsonObject o = QJsonObject::fromVariantMap(c.params);
+        o.insert(QStringLiteral("id"), c.id);
+        o.insert(QStringLiteral("type"), c.type);
+        curves.append(o);
+    }
+    return QJsonObject{{QStringLiteral("id"), m_id},
+                       {QStringLiteral("name"), m_name},
+                       {QStringLiteral("curves"), curves}};
+}
+
+DrawingSketch *DrawingSketch::fromJson(const QJsonObject &obj, QObject *parent)
+{
+    const QString id = obj.value(QStringLiteral("id")).toString();
+    if (id.isEmpty()) return nullptr;
+    auto *sketch = new DrawingSketch(id, obj.value(QStringLiteral("name")).toString(QStringLiteral("Sketch")), parent);
+    for (const QJsonValue &v : obj.value(QStringLiteral("curves")).toArray()) {
+        const QJsonObject c = v.toObject();
+        const QString curveId = c.value(QStringLiteral("id")).toString();
+        const QString type = c.value(QStringLiteral("type")).toString();
+        if (curveId.isEmpty() || type.isEmpty()) continue;
+        QVariantMap params = c.toVariantMap();
+        params.remove(QStringLiteral("id"));
+        params.remove(QStringLiteral("type"));
+        sketch->m_curves.append({curveId, type, params});
+    }
+    return sketch;
 }
 
 bool DrawingSketch::removeCurve(const QString &curveId)

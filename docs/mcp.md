@@ -1,5 +1,7 @@
 # Fission 360 MCP (Model Context Protocol)
 
+Shipped in **1.13.29**. Current app version: **1.13.35** (local test build). GitHub release remains **v1.13.34**.
+
 Headless agent interface over **stdio** (JSON-RPC 2.0, Content-Length framing).  
 Same idea as peer CAD tools: tools call a shared **command registry**, not dialogs.
 

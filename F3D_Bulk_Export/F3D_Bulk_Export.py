@@ -8,6 +8,8 @@
 # Each .f360 carries: parameters, timeline entries, sketch curves, construction planes,
 # and a base64 STEP of the design (BRep) for Fission's import fallback. Per-step STEPs carry the body
 # names and boxes of that step; mesh bodies (not in STEP) travel as raw triangles.
+# timelineMarker is where Fusion's marker sat. timelineCache lists the steps whose STEP was stored,
+# so Fission can reopen at that marker and scrub without replaying every feature.
 #
 # Install: Scripts and Add-Ins → Add-Ins → + → this folder
 #   or copy to %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\F3D_Bulk_Export\
@@ -18,7 +20,7 @@ import traceback, json, os, time, tempfile, base64, re, struct
 CMD_ID = 'F360_FissionExporter'
 CMD_NAME = 'Export to Fission360'
 CMD_DESC = 'Export designs to .f360 (STEP BRep + timeline + sketches)'
-EXPORTER_VERSION = '1.6'
+EXPORTER_VERSION = '1.7'
 
 handlers = []
 app = None
@@ -606,6 +608,12 @@ def export_document_to_f360(doc, out_path, include_step=True, unhide=False, prog
             'source': 'F3D_Bulk_Export',
         },
     }
+    try:
+        marker = int(design.timeline.markerPosition)
+        payload['timelineMarker'] = marker
+        payload['metadata']['timelineMarker'] = marker
+    except Exception:
+        pass
 
     if progress_cb:
         progress_cb('Parameters…')
@@ -660,6 +668,12 @@ def export_document_to_f360(doc, out_path, include_step=True, unhide=False, prog
     has_snapshots = False
     if per_step:
         has_snapshots = export_step_snapshots(design, payload['timeline'], progress_cb)
+    payload['timelineCache'] = {
+        'marker': payload.get('timelineMarker', design.timeline.count),
+        'version': 1,
+        'steps': [e.get('index') for e in payload['timeline']
+                  if e.get('stepData') or e.get('stepEmpty')],
+    }
 
     # Full-design STEP as BRep carrier (Fission load → importStepFallback); not needed with snapshots
     if include_step and not has_snapshots:
