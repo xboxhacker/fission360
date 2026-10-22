@@ -24,7 +24,7 @@ if (-not (Test-Path (Join-Path $src "Fission360.exe"))) {
 if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
 New-Item -ItemType Directory -Force $dst | Out-Null
 
-robocopy $src $dst /E /XD CMakeFiles /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+robocopy $src $dst /E /XD CMakeFiles /XF *.pdb *.ilk *.exp *.lib *.previous.exe /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
 
 # Safety net: pull a complete OCCT runtime if the build tree is missing TKBRep.dll etc.
@@ -59,6 +59,19 @@ if (-not (Test-Path (Join-Path $dst "TKBRep.dll"))) {
 }
 if (-not (Test-Path (Join-Path $dst "TKBRep.dll"))) {
     throw "Package is still missing TKBRep.dll - refusing to ship a broken zip."
+}
+
+# Smoke test: the packaged exe must stay up with no QML load error (1.13.35 shipped one that quit at launch).
+$smokeErr = Join-Path $env:TEMP "Fission360-package-smoke.txt"
+$prevLog = $env:QT_FORCE_STDERR_LOGGING
+$env:QT_FORCE_STDERR_LOGGING = "1"
+$smoke = Start-Process -FilePath (Join-Path $dst "Fission360.exe") -WorkingDirectory $dst -RedirectStandardError $smokeErr -PassThru
+$quit = $smoke.WaitForExit(10000)
+if (-not $quit) { Stop-Process -Id $smoke.Id -Force; $smoke.WaitForExit() }
+$env:QT_FORCE_STDERR_LOGGING = $prevLog
+$smokeLog = if (Test-Path $smokeErr) { Get-Content $smokeErr -Raw } else { "" }
+if ($quit -or $smokeLog -match "failed to load component|is not a type|Type \w+ unavailable") {
+    throw "Packaged Fission360.exe failed the launch smoke test - refusing to ship.`n$smokeLog"
 }
 
 Copy-Item LICENSE, THIRD_PARTY_NOTICES.md, README.md $dst -Force

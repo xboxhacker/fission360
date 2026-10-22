@@ -153,7 +153,6 @@ Rectangle {
                             id: chipArea
                             anchors.fill: parent
                             hoverEnabled: true
-                            pressDelay: 140
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             onClicked: (m) => {
                                 if (m.button === Qt.RightButton) menu.openFor(chip.feature, chip.index)

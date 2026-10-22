@@ -13,6 +13,10 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
+### 1.13.36 — Hotfix: 1.13.35 would not start
+- **Startup**: the 1.13.35 build quit at launch with no window. `TimelinePanel.qml` set `pressDelay` on a `MouseArea` (that property only exists on `Flickable`), so `MainWindow` failed to load. The line is removed.
+- **Packaging**: `scripts/package-windows.ps1` now launches the packaged exe and refuses to write the zip if it exits within 10 s or logs a QML load error. Build leftovers (`*.exp`, `*.lib`, `*.pdb`, `*.ilk`, `Fission360.previous.exe`) are no longer copied into the release.
+
 ### 1.13.35 — Drawing sheet, open cache, timeline scrub
 `--selftest` **417 passed, 0 failed**. Windows zip: `Fission360-1.13.35-windows-x64.zip`.
 
