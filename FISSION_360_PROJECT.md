@@ -177,12 +177,12 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - A self-test or UI-test process left running locks the exe and the next link fails with LNK1104: `Get-Process Fission360 | Stop-Process -Force` before building, and start test runs with a timeout (`$p.WaitForExit(300000)`)
 
 ## Current State
-*(Source and local Windows test build **1.13.35**. GitHub release remains **v1.13.34**.)*
-- **Version 1.13.35** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.6** / manifest **1.6.0** (`../F3D_Bulk_Export`)
+*(Source and Windows release **1.13.35**.)*
+- **Version 1.13.35** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.7** / manifest **1.7.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
 - **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
-- Last built binary: `build-rel\Release\Fission360.exe` **1.13.35**, packaged locally as `dist\Fission360-1.13.35-windows-x64.zip` (not published). `dist\Fission360` junctions to that folder. Published GitHub release remains https://github.com/xboxhacker/fission360/releases/tag/v1.13.34
+- Last built binary: `build-rel\Release\Fission360.exe` **1.13.35**, packaged as `dist\Fission360-1.13.35-windows-x64.zip`. `dist\Fission360` junctions to that folder. Published GitHub release: https://github.com/xboxhacker/fission360/releases/tag/v1.13.35
 - Self-tests: **417 passed, 0 failed** on the 1.13.35 build (`--selftest`). UI walkthrough last recorded at 163 checks when Drawing scaffolding landed
 - **1.13.29–1.13.34 (shipped):** command registry + `Fission360 --mcp`; startup GitHub update check; File ▸ Export Viewport PNG (no grid); Display Settings grid toggle; **Report Bug** (top bar / File / Help); INSERT ribbon captions **Mesh / STEP / McMaster**; Shell retries OCCT complete-intersection, then a punch fallback, and rejects tiny corner-spike faces; version history is a compressed `history` array **inside** the `.f360` (legacy `.versions` sidecars migrate on save)
 - **Save**: Compact JSON once, chunked write + progress (large Fusion exports stay responsive); `testLargeFileSave` (~11 MB synthetic). The file also stores `resultCache` (compressed solids at the saved timeline marker). A matching open skips the rebuild and returns to that marker, including when it is not at the end. Undo and version snapshots omit the cache.

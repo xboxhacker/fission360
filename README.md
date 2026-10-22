@@ -94,7 +94,7 @@ The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python
 
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.35**. Local Windows test zip: `dist/Fission360-1.13.35-windows-x64.zip` (not published). GitHub release remains **v1.13.34**. Up next: real CAM toolpaths and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source and Windows release: **1.13.35** (`Fission360-1.13.35-windows-x64.zip`). Up next: real CAM toolpaths and optional lock/sync.
 
 MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md). SolidCraft issue recipes: [`docs/solidcraft-issue-parity.md`](docs/solidcraft-issue-parity.md).
 

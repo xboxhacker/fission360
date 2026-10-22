@@ -1,6 +1,6 @@
 # SolidCraft public issue census
 
-Public issues from [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft/issues), fetched 2026-10-21. Snapshot only. Fission fixes after this fetch are in `CHANGELOG.md` **1.13.35** (local test build, not published). This census was not re-fetched.
+Public issues from [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft/issues), fetched 2026-10-21. Snapshot only. Fission fixes after this fetch are in `CHANGELOG.md` **1.13.35**. This census was not re-fetched.
 Titles and labels only. Issue bodies were skimmed when a title did not name a feature, and are not copied here.
 One bucket per issue. `IGNORE-TRUCK` is Rust/truck toolchain or kernel-internal work with no user CAD-feature result (fillet, extrude, join, and similar failures stay in the feature bucket even if a truck panic is mentioned).
 

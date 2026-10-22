@@ -2,7 +2,7 @@
 
 Behaviour and failure modes only. No SolidCraft or truck source is copied here, and this note does not change Fission code.
 
-Scan date: 2026-10-22 UTC. Repo: [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) (public issues). Fission tree: OCCT 7.6 + Qt/QML. **1.13.35** is built locally (`dist/Fission360-1.13.35-windows-x64.zip`) and is not published. GitHub latest remains **v1.13.34**. The drawing sheet and drawing-save path below are that local build.
+Scan date: 2026-10-22 UTC. Repo: [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) (public issues). Fission tree: OCCT 7.6 + Qt/QML. **1.13.35** is the published Windows release (`Fission360-1.13.35-windows-x64.zip`). The drawing sheet and drawing-save path below are in that build.
 
 ## Method
 
@@ -18,7 +18,7 @@ No patches.
 
 ## Drawings
 
-Fission Phase 9 (`CHANGELOG.md` 1.9.0 / 1.10.0) has sheets, HLR views, dimensions, PDF/DXF/PNG/TIFF, and parts/revision/bend tables in `DrawingManager`. The 1.13.35 sheet (`DrawingWorkspace.qml`) is in the local test build. Front views use the HLR plane's X/Y, so a box keeps its height. The DRAWING ribbon is the command bar.
+Fission Phase 9 (`CHANGELOG.md` 1.9.0 / 1.10.0) has sheets, HLR views, dimensions, PDF/DXF/PNG/TIFF, and parts/revision/bend tables in `DrawingManager`. The 1.13.35 sheet (`DrawingWorkspace.qml`) is in the published Windows build. Front views use the HLR plane's X/Y, so a box keeps its height. The DRAWING ribbon is the command bar.
 
 | Issue | Title | Verdict | Evidence |
 |---|---|---|---|
@@ -29,7 +29,7 @@ Fission Phase 9 (`CHANGELOG.md` 1.9.0 / 1.10.0) has sheets, HLR views, dimension
 | [#2455](https://github.com/tangency-labs/solidcraft/issues/2455) | Drawing W06a: exact orthographic hidden lines for the analytic subset | NOT-APPLICABLE | Same truck analytic subset. Fission already toggles `showHiddenLines` on HLR output. |
 | [#3874](https://github.com/tangency-labs/solidcraft/issues/3874) | Drawing W24–W26: bill of materials, parts lists, balloons | LIKELY-SAME | `addPartsList` emits one row per body, quantity 1, one material (`DrawingManager.cpp`). No balloon annotation exists in `DrawingWorkspace.qml`. The DRAWING ribbon can place the table; PDF `paintSheet` draws tables. |
 | [#3875](https://github.com/tangency-labs/solidcraft/issues/3875) | Drawing W18: sheets, borders, title blocks, templates | POSSIBLY-SAME | Sheets and a title block exist (`DrawingDocument::addSheet`, PDF title block in `paintSheet`). The 1.13.35 sheet draws the part name, size, standard, and angle, and maps A0–A4 plus ANSI A–E (`DrawingWorkspace.qml` `mmW`/`mmH`; anything else becomes 420×297). No drawing-template files. |
-| [#3890](https://github.com/tangency-labs/solidcraft/issues/3890) | Drawing W11, W12, W15: where drawings are saved | ADDRESSED in local 1.13.35 (not published) | Save writes a `drawings` array on the live `.f360` (sheets, views, curves, annotations, tables, title block, standard, projection, sheet size, image paths). Version snapshots still store only the link id. Older files that have no `drawings` array still open. Not in the published v1.13.34 binary. |
+| [#3890](https://github.com/tangency-labs/solidcraft/issues/3890) | Drawing W11, W12, W15: where drawings are saved | ADDRESSED in 1.13.35 | Save writes a `drawings` array on the live `.f360` (sheets, views, curves, annotations, tables, title block, standard, projection, sheet size, image paths). Version snapshots still store only the link id. Older files that have no `drawings` array still open. |
 | [#4258](https://github.com/tangency-labs/solidcraft/issues/4258) | Section view is generally buggy | LIKELY-SAME | `DrawingProjector::projectSection` does not cut the solid. It projects the look direction and appends one centre line. `DrawingViewItem` then hatches the whole view box. The 1.13.35 sheet drag does pass `projectDirection` from the cut line. |
 | [#4562](https://github.com/tangency-labs/solidcraft/issues/4562) | Section view requests | UNKNOWN | Title only. No public recipe was read. Overlaps #4258. |
 | [#4326](https://github.com/tangency-labs/solidcraft/issues/4326) | Drawing a diameter line does not snap through the circle centre | NOT-APPLICABLE | Sketch line snap, not a drawing view. Leave it to the sketch pass. |
@@ -174,7 +174,7 @@ LIKELY-SAME (14): #67, #1033, #1153, #1284, #2052, #2219, #2300, #2304, #2437, #
 
 POSSIBLY-SAME (19): #533, #784, #860, #1374, #1784, #2814, #3085, #3108, #3422, #3595, #3720, #3875, #3892, #3924, #4086, #4102, #4186, #4275, #4554.
 
-ALREADY-HANDLED (11): #822, #1089, #1265, #1386, #2410, #3221, #3540, #3614, #3615, #3890, #4138. #3890 is in the local 1.13.35 build and is not in the published v1.13.34 binary.
+ALREADY-HANDLED (11): #822, #1089, #1265, #1386, #2410, #3221, #3540, #3614, #3615, #3890, #4138. #3890 shipped in 1.13.35.
 
 UNKNOWN (18): #2, #1229, #1468, #1611, #2117, #3431, #3643, #3730, #3737, #3848, #3947, #3977, #4130, #4314, #4483, #4552, #4562, #4604.
 
@@ -182,7 +182,7 @@ NOT-APPLICABLE is the other 81 issues: 61 in the tables (including nine truck ST
 
 ## Prioritized Fission gaps
 
-1. **Drawings are saved in local 1.13.35** (not in the published v1.13.34 binary). The live `.f360` has a `drawings` body; version snapshots still omit it. Older files with only a link id still open (#3890).
+1. **Drawings are saved in 1.13.35.** The live `.f360` has a `drawings` body; version snapshots still omit it. Older files with only a link id still open (#3890).
 2. **Section views are not sections.** `projectSection` projects another orthographic view and draws a centre line. The sheet hatch covers the view box, not the cut face (#4258). The 1.13.35 drag passes `projectDirection`; it still does not cut the solid.
 3. **Sheet dimensions are a length between two clicks.** The 1.13.35 sheet stores the points in millimetres via `paperToMm`, draws the segment, and labels the distance. They are not driven by model edges. PDF annotation export was not re-audited in this pass.
 4. **Parts list is a body dump, and there are no balloons** (#3874). Quantity is always 1. The DRAWING ribbon places the table; PDF table painting already exists.

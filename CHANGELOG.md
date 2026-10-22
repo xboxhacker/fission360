@@ -11,10 +11,10 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — Source **1.13.35**. The `dist/Fission360-1.13.35-windows-x64.zip` was not refreshed, and there is no `v1.13.35` release tag. GitHub release remains `v1.13.34`. Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
 ### 1.13.35 — Drawing sheet, open cache, timeline scrub
-`--selftest` **417 passed, 0 failed**. The `dist` zip was not refreshed this round.
+`--selftest` **417 passed, 0 failed**. Windows zip: `Fission360-1.13.35-windows-x64.zip`.
 
 - **Drawing save**: the live `.f360` stores a `drawings` array (sheets, views, projected curves, annotations, tables, title block, standard, projection angle, sheet size, image paths). Reopening the design restores the sheet. Files that only have a `linkedAssets` id still open. Version-history snapshots and autosave omit the drawing body, same as the thumbnail and nested history.
 - **Drawing views**: HLR edges are already on the view plane, so a front view uses that plane's X and Y. Dotting them with world Z had collapsed every front view to a horizontal line. A 40×20×10 box front view is 40.0×20.0 mm. Scale labels are ratios (`1:1`, `2:1`, `1:2`), not `1.00` rendered as `1:00`. Round edges keep a 0.02 mm sagitta, so a cylinder top view stays a circle (selftest: 71 segments, 0.010 mm radial error) instead of a dozen-sided polygon. Opening a drawing rebuilds its views. The selection frame has a margin so its border sits clear of the outline. The orientation list opens under the menu.

@@ -1,6 +1,6 @@
 # SolidCraft sketch and constraint parity
 
-Public issues on [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft/issues), compared with Fission 360’s own 2D sketch solver. Behaviour only. No SolidCraft or truck source was copied. This scan did not change sketch code. Later modeling and drawing fixes are in `CHANGELOG.md` **1.13.35** (local test build, not published). This sketch note was not re-scanned.
+Public issues on [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft/issues), compared with Fission 360’s own 2D sketch solver. Behaviour only. No SolidCraft or truck source was copied. This scan did not change sketch code. Later modeling and drawing fixes are in `CHANGELOG.md` **1.13.35**. This sketch note was not re-scanned.
 
 Fission solves sketches with `SketchSolver` (damped minimum-norm Gauss-Newton, numeric Jacobian) on OCCT curves. It does not use the truck Rust kernel. Truck, WASM, and cargo issues are out of scope.
 

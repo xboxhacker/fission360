@@ -2,7 +2,7 @@
 
 **Status:** design only for macOS / Linux. Windows packages are built locally
 (`scripts/package-windows.ps1`) and published as GitHub releases. Latest shipped
-zip: **v1.13.34** (`Fission360-1.13.34-windows-x64.zip`). A newer local test zip, `Fission360-1.13.35-windows-x64.zip`, is not published. macOS and Linux jobs
+zip: **v1.13.35** (`Fission360-1.13.35-windows-x64.zip`). macOS and Linux jobs
 below will not produce binaries until the CMake blockers in §2 are fixed and
 runners have Qt + OCCT.
 
