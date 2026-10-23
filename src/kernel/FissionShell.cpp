@@ -18,6 +18,8 @@
 #include <BRepTools.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <QElapsedTimer>
 #include <ShapeFix_Shape.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
@@ -28,6 +30,36 @@
 #include <cmath>
 
 namespace {
+
+// One budget for the whole Shell: every OCCT offset and boolean step gets a progress range from it and stops
+// once it runs out, so a body OCCT cannot shell fails with a message instead of freezing the window.
+class ShellDeadline : public Message_ProgressIndicator {
+public:
+    explicit ShellDeadline(qint64 ms) : m_ms(ms) { m_timer.start(); }
+    Standard_Boolean UserBreak() override { return m_timer.elapsed() > m_ms; }
+    void Show(const Message_ProgressScope &, const Standard_Boolean) override {}
+    bool expired() const { return m_timer.elapsed() > m_ms; }
+
+private:
+    QElapsedTimer m_timer;
+    qint64 m_ms;
+};
+using Deadline = Handle(ShellDeadline);
+constexpr qint64 kShellLimitMs = 15000;
+
+// a minus b within the deadline; null when it fails or runs out of time
+TopoDS_Shape cutWithin(const TopoDS_Shape &a, const TopoDS_Shape &b, const Deadline &dl) {
+    if (dl->expired()) return {};
+    TopTools_ListOfShape args, tools;
+    args.Append(a);
+    tools.Append(b);
+    BRepAlgoAPI_Cut cut;
+    cut.SetArguments(args);
+    cut.SetTools(tools);
+    cut.Build(dl->Start());
+    if (!cut.IsDone() || dl->expired()) return {};
+    return cut.Shape();
+}
 
 gp_Dir outwardNormal(const TopoDS_Face &f) {
     BRepAdaptor_Surface s(f);
@@ -101,7 +133,7 @@ struct ThickAttempt {
 };
 
 TopoDS_Shape thickSolid(const TopoDS_Shape &solid, const TopTools_ListOfShape &openings, double offset,
-                        double maxVolume) {
+                        double maxVolume, const Deadline &dl) {
     // Planar bodies: Intersection-first — Arc joins are what produce the jagged inner-corner teeth.
     // Curved bodies: Arc first (Intersection often fails on cylinders/fillets).
     const bool planar = allPlanar(solid);
@@ -123,15 +155,14 @@ TopoDS_Shape thickSolid(const TopoDS_Shape &solid, const TopTools_ListOfShape &o
     const int n = planar ? int(sizeof(planarFirst) / sizeof(planarFirst[0]))
                          : int(sizeof(curvedFirst) / sizeof(curvedFirst[0]));
 
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < n && !dl->expired(); ++i) {
         const ThickAttempt &a = attempts[i];
         try {
             BRepOffsetAPI_MakeThickSolid thick;
             thick.MakeThickSolidByJoin(solid, openings, offset, a.tol, BRepOffset_Skin,
                                        a.complete ? Standard_True : Standard_False, Standard_False, a.join,
-                                       a.removeInt ? Standard_True : Standard_False);
-            thick.Build();
-            if (!thick.IsDone()) continue;
+                                       a.removeInt ? Standard_True : Standard_False, dl->Start());
+            if (!thick.IsDone() || dl->expired()) continue;
             // Never loose-accept thick-solid — Arc junk must not ship
             const TopoDS_Shape ok = acceptShell(thick.Shape(), maxVolume, false);
             if (!ok.IsNull()) return ok;
@@ -141,7 +172,7 @@ TopoDS_Shape thickSolid(const TopoDS_Shape &solid, const TopTools_ListOfShape &o
     return {};
 }
 
-TopoDS_Shape offsetSolid(const TopoDS_Shape &solid, double offset) {
+TopoDS_Shape offsetSolid(const TopoDS_Shape &solid, double offset, const Deadline &dl) {
     struct Attempt {
         double tol;
         bool complete;
@@ -154,11 +185,12 @@ TopoDS_Shape offsetSolid(const TopoDS_Shape &solid, double offset) {
         {1e-4, false, GeomAbs_Arc},
     };
     for (const Attempt &a : attempts) {
+        if (dl->expired()) break;
         try {
             BRepOffsetAPI_MakeOffsetShape off;
             off.PerformByJoin(solid, offset, a.tol, BRepOffset_Skin, a.complete ? Standard_True : Standard_False,
-                              Standard_False, a.join, a.complete ? Standard_True : Standard_False);
-            if (!off.IsDone()) continue;
+                              Standard_False, a.join, a.complete ? Standard_True : Standard_False, dl->Start());
+            if (!off.IsDone() || dl->expired()) continue;
             for (TopExp_Explorer exp(off.Shape(), TopAbs_SHELL); exp.More(); exp.Next()) {
                 TopoDS_Solid inner = BRepBuilderAPI_MakeSolid(TopoDS::Shell(exp.Current())).Solid();
                 BRepLib::OrientClosedSolid(inner);
@@ -236,15 +268,14 @@ TopoDS_Shape sewSolid(const TopoDS_Shape &s) {
 
 // Fallback when MakeThickSolid fails: hollow by solid-offset cut, then punch openings with a grown face.
 TopoDS_Shape punchOpenings(const TopoDS_Shape &solid, const TopTools_ListOfShape &openings, double offset,
-                           double maxVolume) {
+                           double maxVolume, const Deadline &dl) {
     if (offset >= 0) return {};
-    const TopoDS_Shape inner = offsetSolid(solid, offset);
+    const TopoDS_Shape inner = offsetSolid(solid, offset, dl);
     if (inner.IsNull()) return {};
     TopoDS_Shape hollow;
     try {
-        BRepAlgoAPI_Cut cut(solid, inner);
-        if (!cut.IsDone()) return {};
-        hollow = cut.Shape();
+        hollow = cutWithin(solid, inner, dl);
+        if (hollow.IsNull()) return {};
     } catch (const Standard_Failure &) {
         return {};
     }
@@ -253,9 +284,8 @@ TopoDS_Shape punchOpenings(const TopoDS_Shape &solid, const TopTools_ListOfShape
         try {
             const TopoDS_Shape tool = punchTool(TopoDS::Face(it.Value()), wall, wall * 0.25 + 0.25);
             if (tool.IsNull()) return {};
-            BRepAlgoAPI_Cut cut(hollow, tool);
-            if (!cut.IsDone()) return {};
-            hollow = cut.Shape();
+            hollow = cutWithin(hollow, tool, dl);
+            if (hollow.IsNull()) return {};
         } catch (const Standard_Failure &) {
             return {};
         }
@@ -289,7 +319,9 @@ bool FissionShell::compute(RebuildContext &ctx) {
 
     QString err;
     const QVariantList refs = list("faces");
-    int body = integer("body");
+    int body = integer("body", -1);
+    // Nothing picked yet: wait for faces (or a body to hollow) instead of hollowing a body straight away
+    if (refs.isEmpty() && body < 0) return fail("Select the faces to remove, or a body to hollow");
     TopTools_ListOfShape openings;
     for (const QVariant &ref : refs) {
         int b = -1;
@@ -325,25 +357,28 @@ bool FissionShell::compute(RebuildContext &ctx) {
             unifiedOpenings.Append(matched);
         }
 
-        TopoDS_Shape result = thickSolid(solid, unifiedOpenings, offset, maxVolume);
-        if (result.IsNull()) result = punchOpenings(solid, unifiedOpenings, offset, maxVolume);
+        const Deadline dl = new ShellDeadline(kShellLimitMs);
+        TopoDS_Shape result = thickSolid(solid, unifiedOpenings, offset, maxVolume, dl);
+        if (result.IsNull()) result = punchOpenings(solid, unifiedOpenings, offset, maxVolume, dl);
+        if (result.IsNull() && dl->expired())
+            return fail("Shell took longer than 15 s and was stopped (try a thinner wall or other faces)");
         if (result.IsNull()) return fail("Shell failed: the walls could not be offset (try a thinner wall)");
         ctx.bodies[body].shape = result;
         return true;
     }
 
-    const TopoDS_Shape inner = offsetSolid(solid, offset);
+    const Deadline dl = new ShellDeadline(kShellLimitMs);
+    const TopoDS_Shape inner = offsetSolid(solid, offset, dl);
+    if (inner.IsNull() && dl->expired()) return fail("Shell took longer than 15 s and was stopped (try a thinner wall)");
     if (inner.IsNull()) return fail("Shell failed: the walls could not be offset (try a thinner wall)");
     try {
+        const TopoDS_Shape cut = offset < 0 ? cutWithin(solid, inner, dl) : cutWithin(inner, solid, dl);
+        if (cut.IsNull()) return fail(dl->expired() ? "Shell took longer than 15 s and was stopped" : "Shell failed");
         if (offset < 0) {
-            BRepAlgoAPI_Cut cut(solid, inner);
-            if (!cut.IsDone()) return fail("Shell failed");
-            const TopoDS_Shape ok = acceptShell(cut.Shape(), maxVolume, true);
-            ctx.bodies[body].shape = ok.IsNull() ? tryFix(cut.Shape()) : ok;
+            const TopoDS_Shape ok = acceptShell(cut, maxVolume, true);
+            ctx.bodies[body].shape = ok.IsNull() ? tryFix(cut) : ok;
         } else {
-            BRepAlgoAPI_Cut cut(inner, solid);
-            if (!cut.IsDone()) return fail("Shell failed");
-            ctx.bodies[body].shape = cut.Shape();
+            ctx.bodies[body].shape = cut;
         }
     } catch (const Standard_Failure &) {
         return fail("Shell failed");

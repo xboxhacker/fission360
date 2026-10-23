@@ -184,7 +184,7 @@ NOT-APPLICABLE is the other 81 issues: 61 in the tables (including nine truck ST
 
 1. **Drawings are saved in 1.13.35.** The live `.f360` has a `drawings` body; version snapshots still omit it. Older files with only a link id still open (#3890).
 2. **Section views are not sections.** `projectSection` projects another orthographic view and draws a centre line. The sheet hatch covers the view box, not the cut face (#4258). The 1.13.35 drag passes `projectDirection`; it still does not cut the solid.
-3. **Sheet dimensions are a length between two clicks.** The 1.13.35 sheet stores the points in millimetres via `paperToMm`, draws the segment, and labels the distance. They are not driven by model edges. PDF annotation export was not re-audited in this pass.
+3. **Sheet dimensions: addressed in 1.13.39.** Dimensions are picked on projected model edges (line length, distance between parallel lines, angle, radius, diameter, plus Linear / Aligned / Angular / Radius / Diameter tools) and drawn the same on the sheet, in PDF / PNG / TIFF and in DXF. Since 1.13.40 they are stored on their view, follow it, and are re-measured when the view is projected again (red when an edge is gone).
 4. **Parts list is a body dump, and there are no balloons** (#3874). Quantity is always 1. The DRAWING ribbon places the table; PDF table painting already exists.
 5. **CAM post is not a toolpath** (#1153). G-code walks the stock box. Phase 12 in the changelog is still open. Simulate is an estimate, not a removal simulation.
 6. **No DXF import** (#67, #2052, #2300). Flat-pattern DXF still puts holes on layer `0` and writes continuous bend lines (#1284). Ellipses and splines are polylines (`FileExport.cpp`), which is enough to avoid #1089.

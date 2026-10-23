@@ -1490,6 +1490,139 @@ Item {
             return 200
         }
     ]
+    // FISSION_UITEST_ONLY=<name> runs one of these short scripts instead of the whole walkthrough
+    readonly property string only: uiTest.env("FISSION_UITEST_ONLY")
+    readonly property var quickSteps: ({
+        panels: [
+            () => {
+                fissionApp.newDocument()
+                const s = app.doc.addFeature("Sketch", { plane: "XY" })
+                s.addRectangle(0, 0, 40, 20)
+                s.addCircle(10, 10, 4)
+                app.doc.rebuild()
+                app.doc.addFeature("Extrude", { sketch: s.id, distance: "10 mm", operation: "newBody" })
+                return 800
+            },
+            () => {
+                app.finishCreateDrawing({ standard: "ISO", sheetSize: "A3", orientation: "landscape",
+                                          projectionAngle: "third", partName: "Dims", drawnBy: "UiTest" })
+                return 500
+            },
+            () => {
+                // Top view of a 40 x 20 plate with a 8 mm hole at (10, 10), scale 2, its top left at (60, 60):
+                // left edge x 60, right edge x 140, top edge y 60, hole centre (80, 80), radius 8 on the sheet
+                const mgr = fissionApp.drawingManager, ws = app.drawingWorkspace
+                const sheet = app.activeDrawing.sheet(0)
+                for (let i = sheet.viewCount - 1; i >= 0; --i) sheet.removeView(sheet.view(i).id)
+                const v = sheet.addView("base", { position: Qt.point(60, 60), orientation: "top", scale: 2 })
+                mgr.projectView(v, app.doc, app.activeDrawing)
+                const left = mgr.pickSheetEdge(sheet, 60, 85, 1), right = mgr.pickSheetEdge(sheet, 140, 85, 1)
+                const top = mgr.pickSheetEdge(sheet, 110, 60, 1)
+                const hole = mgr.pickSheetEdge(sheet, 80 + 8 * Math.SQRT1_2, 80 - 8 * Math.SQRT1_2, 1)
+                uiTest.check(left.kind === "line" && right.kind === "line" && top.kind === "line" && hole.kind === "circle",
+                             "dims: view edges can be picked as lines and a circle",
+                             [left.kind, right.kind, top.kind, hole.kind].join(","))
+                const made = [mgr.buildDimension("dimension", left, right, 100, 45, 2),
+                              mgr.buildDimension("dimension", hole, {}, 100, 100, 2),
+                              mgr.buildDimension("radius", hole, {}, 60, 110, 2),
+                              mgr.buildDimension("angular", left, top, 70, 70, 2),
+                              mgr.buildDimension("dimension", top, {}, 110, 40, 2)]
+                const labels = made.map(a => a.error ? "error: " + a.error : mgr.dimensionLabel(a))
+                uiTest.check(labels.join(" | ") === "40 | Ø8 | R4 | 90° | 40",
+                             "dims: distance between lines, diameter, radius, angle, line length", labels.join(" | "))
+                const picksOf = [[left, right], [hole], [hole], [left, top], [top]]
+                const ids = made.map((a, i) => a.error ? "" : sheet.addAnnotation(mgr.attachDimension(sheet, a, picksOf[i])))
+                const first = () => { for (let i = 0; i < sheet.annotationCount; ++i) if (sheet.annotation(i).id === ids[0]) return sheet.annotation(i) }
+                uiTest.check(first().space === "view" && first().view === v.id, "dims: dimensions are stored on their view",
+                             JSON.stringify(first().space))
+                const before = mgr.dimensionGeometry(sheet, first()).text.x
+                v.position = Qt.point(80, 60)
+                const after = mgr.dimensionGeometry(sheet, first()).text.x
+                uiTest.check(Math.abs(after - before - 20) < 1e-6, "dims: moving the view moves its dimensions",
+                             before + " -> " + after)
+                mgr.projectView(v, app.doc, app.activeDrawing)
+                const again = ids.map(id => { for (let i = 0; i < sheet.annotationCount; ++i) if (sheet.annotation(i).id === id) return sheet.annotation(i) })
+                uiTest.check(again.every(a => !a.detached) && mgr.dimensionLabel(again[0]) === "40" && mgr.dimensionLabel(again[1]) === "Ø8",
+                             "dims: projecting the view again re-attaches them with the same values",
+                             again.map(a => mgr.dimensionLabel(a) + (a.detached ? "!" : "")).join(" "))
+                ws.toggleTitleBlock()
+                uiTest.check(!sheet.titleBlockVisible && app.doc.modified, "drawing: the title block can be deleted (and the design is unsaved)")
+                ws.toggleTitleBlock()
+                const note = sheet.addAnnotation({ kind: "text", x: 30, y: 30, text: "Note", fontSize: 3.5 })
+                ws.selectedNoteId = note
+                ws.setAnn({ text: "Edited note", fontSize: 7, bold: true })
+                uiTest.check(ws.selectedAnn && ws.selectedAnn.text === "Edited note" && ws.selectedAnn.bold
+                             && ws.selectedAnn.fontSize === 7, "drawing note: text, size and bold are saved and re-read",
+                             JSON.stringify(ws.selectedAnn))
+                const tmp = uiTest.env("TEMP")
+                uiTest.check(mgr.exportPdf(sheet, tmp + "/fission_uitest_dims.pdf")
+                             && mgr.exportDxf(sheet, tmp + "/fission_uitest_dims.dxf"),
+                             "dims: the sheet exports to PDF and DXF", mgr.lastError)
+                return 700
+            },
+            () => { uiTest.grab("dims"); return 300 },
+            () => { app.leaveDrawing(); app.openManufacture(0); return 800 },
+            () => { uiTest.grab("manufacture"); return 300 },
+            () => {
+                app.enterDesignWorkspace()
+                uiTest.check(!app.showManufacture, "manufacture: leaving for Design closes its panel")
+                return 300
+            }
+        ]
+    })
+    // WebEngine is not loaded at startup; the McMaster dialog must still bring it up on first use
+    readonly property var mcmasterSteps: [
+        () => { fissionApp.newDocument(); app.insertMcMaster(); return 6000 },
+        () => {
+            const l = app.mcmasterInsertDialog
+            uiTest.check(l.status === Loader.Ready && !!l.item, "mcmaster: the browser dialog (WebEngine) loads on demand",
+                         "status " + l.status)
+            uiTest.grab("mcmaster")
+            return 300
+        }
+    ]
+    // Shell started with nothing selected (it crashed in 1.13.39), on FISSION_UITEST_FILE or a plain box
+    readonly property var shellSteps: [
+        () => {
+            const f = uiTest.env("FISSION_UITEST_FILE")
+            if (f.length) fissionApp.openDocument(f)
+            else {
+                fissionApp.newDocument()
+                const s = app.doc.addFeature("Sketch", { plane: "XY" })
+                s.addRectangle(0, 0, 40, 20)
+                app.doc.rebuild()
+                app.doc.addFeature("Extrude", { sketch: s.id, distance: "10 mm", operation: "newBody" })
+            }
+            return 1500
+        },
+        () => { app.selection.clear(); app.startCommand("Shell"); return 2500 },
+        () => {
+            const f = app.doc.featureById(app.commandFeatureId)
+            uiTest.check(!!f, "shell: the command starts with nothing picked", f ? f.error : "no feature")
+            uiTest.grab("shell")
+            app.finishCommand(false)
+            return 500
+        }
+    ]
+    // Open / save timing on FISSION_UITEST_FILE: opens it, saves a copy to FISSION_UITEST_SAVE, opens the copy
+    readonly property var openSteps: [
+        () => {
+            let t = uiTest.ms()
+            const ok = fissionApp.openDocument(uiTest.env("FISSION_UITEST_FILE"))
+            uiTest.perf("open", uiTest.ms() - t, String(ok))
+            t = uiTest.ms()
+            const saved = app.doc.save(uiTest.env("FISSION_UITEST_SAVE"))
+            uiTest.perf("save copy", uiTest.ms() - t, String(saved))
+            t = uiTest.ms()
+            const again = fissionApp.openDocument(uiTest.env("FISSION_UITEST_SAVE"))
+            uiTest.perf("open copy", uiTest.ms() - t, String(again))
+            uiTest.check(ok && saved && again, "open: the file opens, saves and opens again")
+            return 300
+        }
+    ]
+    readonly property var script: only === "open" ? openSteps : only === "shell" ? shellSteps : only === "mcmaster" ? mcmasterSteps
+                                  : only.length && quickSteps[only] ? quickSteps[only] : steps
+
     property var tabs: null
     property var sketchDrag: null
     property real homeYaw: 0
@@ -1497,15 +1630,15 @@ Item {
     property real planeWidth: 0
 
     function next() {
-        if (step >= steps.length) {
+        if (step >= script.length) {
             // Animated GIF of the walkthrough screenshots (optional; keep maxWidth modest for low-end PCs)
-            uiTest.exportGif("walkthrough.gif", [], 40, 720)
+            if (script === steps) uiTest.exportGif("walkthrough.gif", [], 40, 720)
             uiTest.finish()
             return
         }
         let delay = 600
         try {
-            delay = steps[step]() || 600
+            delay = script[step]() || 600
         } catch (e) {
             uiTest.check(false, "step " + step + " threw", String(e))
         }

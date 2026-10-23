@@ -56,6 +56,21 @@ public:
     Q_INVOKABLE QString addBendTable(DrawingSheet *sheet, FissionDocument *design, const QPointF &pos = QPointF(20, 20));
     Q_INVOKABLE QString addImage(DrawingSheet *sheet, const QString &path, const QPointF &pos, double widthMm = 40);
 
+    // Dimensions (DrawingDimension): build one from picks, what to draw for it, its text, and the one
+    // nearest a sheet point within tolMm ("" when none)
+    Q_INVOKABLE QVariantMap buildDimension(const QString &tool, const QVariantMap &a, const QVariantMap &b,
+                                           double placeX, double placeY, double viewScale) const;
+    Q_INVOKABLE QVariantMap dimensionGeometry(DrawingSheet *sheet, const QVariantMap &annotation) const;
+    // A dimension built from picks on one view, attached to it: stored in that view's model mm so it moves
+    // with the view and is re-measured when the view is projected again
+    Q_INVOKABLE QVariantMap attachDimension(DrawingSheet *sheet, const QVariantMap &annotation,
+                                            const QVariantList &picks) const;
+    // Drag a dimension's line / text to a sheet point
+    Q_INVOKABLE bool moveDimension(DrawingSheet *sheet, const QString &id, double x, double y) const;
+    Q_INVOKABLE QString dimensionLabel(const QVariantMap &annotation) const;
+    Q_INVOKABLE QString dimensionAt(DrawingSheet *sheet, double x, double y, double tolMm) const;
+    // The model edge or point under a sheet point, across all views of the sheet (DrawingView::pickEdge)
+    Q_INVOKABLE QVariantMap pickSheetEdge(DrawingSheet *sheet, double x, double y, double tolMm) const;
     Q_INVOKABLE QString lastError() const { return m_lastError; }
 
 signals:

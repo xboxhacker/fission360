@@ -94,7 +94,14 @@ bool DrawingSheet::removeView(const QString &viewId)
         if (m_views[i]->id() == viewId) {
             m_views[i]->deleteLater();
             m_views.removeAt(i);
+            // Dimensions attached to the view go with it
+            const qsizetype before = m_annotations.size();
+            m_annotations.removeIf([&](const QVariant &v) {
+                const QVariantMap a = v.toMap();
+                return a.value("space").toString() == QLatin1String("view") && a.value("view").toString() == viewId;
+            });
             emit viewsChanged();
+            if (m_annotations.size() != before) emit annotationsChanged();
             return true;
         }
     }
@@ -246,6 +253,7 @@ QJsonObject DrawingSheet::toJson() const
         {QStringLiteral("orientation"), m_orientation},
         {QStringLiteral("scale"), m_scale},
         {QStringLiteral("titleBlock"), m_titleBlock},
+        {QStringLiteral("titleBlockVisible"), m_titleBlockVisible},
         {QStringLiteral("title"), m_title},
         {QStringLiteral("drawnBy"), m_drawnBy},
         {QStringLiteral("revision"), m_revision},
@@ -275,6 +283,7 @@ DrawingSheet *DrawingSheet::fromJson(const QJsonObject &obj, QObject *parent)
                                        ? obj.value(QStringLiteral("scale")).toDouble(1.0) : 1.0,
                                    parent);
     sheet->setTitleBlockName(obj.value(QStringLiteral("titleBlock")).toString(sheet->titleBlockName()));
+    sheet->setTitleBlockVisible(obj.value(QStringLiteral("titleBlockVisible")).toBool(true));
     sheet->setTitle(obj.value(QStringLiteral("title")).toString());
     sheet->setDrawnBy(obj.value(QStringLiteral("drawnBy")).toString());
     if (obj.contains(QStringLiteral("revision")))

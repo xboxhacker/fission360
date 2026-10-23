@@ -199,6 +199,7 @@ Item {
     }
 
     ColumnLayout {
+        id: mfgCol
         anchors.fill: parent
         spacing: 0
 
@@ -226,7 +227,9 @@ Item {
         }
 
         Text {
+            id: mfgDesc
             Layout.fillWidth: true
+            Layout.maximumWidth: mfgCol.width - 20
             Layout.leftMargin: 10
             Layout.rightMargin: 10
             Layout.topMargin: 8
@@ -239,6 +242,7 @@ Item {
         TabBar {
             id: tabs
             Layout.fillWidth: true
+            Layout.maximumWidth: mfgCol.width - 16
             Layout.leftMargin: 8
             Layout.rightMargin: 8
             Layout.topMargin: 6
@@ -251,7 +255,9 @@ Item {
         }
 
         StackLayout {
+            id: mfgStack
             Layout.fillWidth: true
+            Layout.maximumWidth: mfgCol.width - 16
             Layout.fillHeight: true
             Layout.margins: 8
             currentIndex: panel.tabIndex

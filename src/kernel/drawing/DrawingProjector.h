@@ -17,6 +17,9 @@ struct Result {
     QVariantList visible;   // [{x1,y1,x2,y2}, ...] in mm about the view centre
     QVariantList hidden;
     QVariantList section;   // section cut curves (section views)
+    // One entry per projected edge, which segments point at with "e": {type "line" | "circle" | "curve",
+    // x1,y1,x2,y2 (end points), cx,cy,r,full for circles, hidden}
+    QVariantList edges;
     double width = 0;       // bounding box of the projection (mm)
     double height = 0;
     bool ok = false;

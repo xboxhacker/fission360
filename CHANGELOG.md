@@ -13,6 +13,73 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
+### 1.13.40 — Linked drawing dimensions, Fusion units, faster big files, Python, Shell hang
+- **Shell no longer hangs**:
+  - Starting Shell with nothing picked hollowed the whole body at once. On a filleted, chamfered body (4KG Spool Hub) OCCT's offset never returned, and the window stopped responding.
+  - Shell now waits: "Select the faces to remove, or a body to hollow". A picked body with no faces still hollows it.
+  - Every offset and boolean step of Shell shares a 15 s budget, and stops with a message instead of freezing.
+- **Fusion sketches at the right size (exporter 1.10)**:
+  - Fusion's API reports every length in **cm** and every angle in **radians**, whatever the design's units. Sketch coordinates, radii, plane offsets and bare feature values were read as mm and degrees, so sketches came in 10× too small while the STEP solids were right.
+  - Fission now reads them as cm and radians. That is the same length, not a rescale. Values with a Fusion expression (`25 mm`, `1 in`) were already right.
+  - The design opens in the Fusion document's own units (mm, cm, m, in or ft). Before, anything that was not inches became mm.
+  - The exporter labels its numbers (`geometryUnits: cm`, `angleUnits: rad`) and writes each sketch's exact frame (origin and X / Y directions). Sketches on offset planes and faces sit where they were in Fusion. Older exports use the plane's offset, which was ignored before.
+- **Python scripts and add-ins** are built in. CMake finds Python 3.11+ development files, builds `PythonHost` on the stable ABI (`python3.lib`, `Py_LIMITED_API` 3.11) and delay-loads `python3.dll` from the user's own Python. Fission still starts without Python. Before, nothing in CMake turned it on, so the Scripts dialog said "Python support was not built in".
+- **Drawings**:
+  - **Dimensions follow their view and the design.** A dimension is stored on its view, in the view's model mm, with the edges it was measured on. Moving or rescaling the view moves it. When the view is projected again (Update from Design, Regenerate, a changed design), each pick is found again among the new edges and the value is re-measured. If an edge is gone, the dimension turns red. Deleting a view deletes its dimensions.
+  - **Dimensions on a view can be selected and dragged**: they sit above the views, so a click no longer selects the view box underneath. A drag moves the dimension line or text (one undo step).
+  - **Notes can be dragged** to a new place, also over views.
+  - **The title block can be edited and deleted.** Click it to edit Title, Drawn by, Revision, Material and Date in the inspector. Delete (or the inspector button) removes it; DRAWING ▸ SHEET ▸ Title Block brings it back. Exports leave it out while it is deleted.
+  - **Orientation box**: a click on its name focuses it, then Up / Down or the mouse wheel step through the orientations and the view re-projects at each step. The arrows on the right still open the list.
+  - **Unsaved prompt**: drawing edits now mark the design unsaved. Leaving a drawing (Back to Design, or Design / Render / Manufacture) with unsaved changes asks Save, Don't Save or Cancel.
+- **Big files open and save much faster.** On the user's 795 MB Fusion import (CompRT): open went from 30 s to 14 s (half of that is the viewport meshing), save from 66 s to 15 s, and the file is now 273 MB.
+  - Version history stored a full compressed copy of the design for every version, Fusion step BReps and meshes included: 506 MB in five versions. A version now refers to large feature data (strings over 64 KB) by hash (`$blob:<sha1>`); revert takes it back from the open design.
+  - Older versions are kept up to a 64 MB budget; the newest always stays. Versions saved before 1.13.40 still hold full copies, so they drop off at the next save.
+  - Open no longer parses the version history: it is cut out of the file text first and parsed only for Version History, revert or save.
+  - The open cache stores solids as binary BRep (`BinTools`), lightly compressed, instead of OCCT's text format. Mesh bodies took 8–11 s each to write as text. Older text caches still open. The cache key hashes the feature data directly instead of encoding it to JSON first (4 s on that file).
+  - Save builds the design's JSON once for both the file and the version snapshot.
+  - `FISSION_TRACE_IO=1` prints each open / save stage with its time.
+  - Files saved by older versions open once with a full rebuild (their cache key changed); the next save writes the new cache.
+- **Imported bodies and every solid tool**: new `--toolbench <file>` runs extrude, offset face, hole, draft, delete face, shell, thread, fillet, chamfer, move, scale, mirror and hollow on faces and edges spread over each body of a STEP / IGES / `.f360`. It prints a per-tool summary; results and the open work are in `FISSION_360_PROJECT.md` ("Imported bodies and solid tools").
+  - **Delete Face** runs OCCT's defeaturing on a copy in a worker thread and gives up after 15 s. On the McMaster hex nut's thread faces it ran 85–200 s on the UI thread, because the defeaturing's own cancel check only comes between its stages.
+  - Still open (found by the bench on the 4KG Spool Hub): Shell fails on curved / chamfered bodies; Offset Face sends curved non-chamfer faces down the chamfer path; Draft fails on some side faces; modeled Thread has no time limit.
+- **UI test scripts**: `FISSION_UITEST_ONLY=shell` (Shell with nothing picked, on `FISSION_UITEST_FILE` or a box) and `=open` (open / save timing, saving a copy to `FISSION_UITEST_SAVE`). `panels` also checks view-attached dimensions, re-projection and the title block.
+
+### 1.13.39 — Drawing dimensions, note styling, lighter startup
+- **Drawing dimensions** (DRAWING ▸ DIMENSIONS, or D on a sheet), measured on projected model edges like Fusion's ViewCurve:
+  - **Dimension** decides from the picks: one line gives its length, two parallel lines their distance, two lines that meet their angle, an arc its radius, a circle its diameter. Corners and circle centres snap.
+  - Tools: **Linear** (horizontal or vertical, chosen by where you place it), **Aligned**, **Angular** (the sector you click in decides which angle), **Radius**, **Diameter**.
+  - Pick, pick (optional), then click to place. The edge under the cursor is highlighted and the dimension follows the cursor. Esc clears the picks, then leaves the tool.
+  - A click on a dimension selects it. The inspector overrides its text (clear it to measure again), and sets its decimals and text size. Delete removes it.
+  - Values are model mm, using the view's scale. The projector now keeps each edge's geometry (line, or circle centre and radius) and tags every segment with its edge (`edges` on the view, saved in the `.f360`).
+  - One module (`DrawingDimension`) builds the dimension and draws it for the sheet, PDF / PNG / TIFF and DXF. Dimensions from older files show as aligned dimensions with their own text.
+- **Drawing notes**:
+  - The inspector's text field saves on Enter or when it loses focus. Before, a click away lost the edit.
+  - Any edit now shows on the sheet straight away. Before, the sheet kept drawing the old text, because an edit leaves the note count unchanged.
+  - New: text size (ISO 3098 heights, 1.8–20 mm), **Bold** and *Italic*, also in PDF / PNG / TIFF.
+- **DXF export**: views, notes and dimensions share one convention (Y = sheet height − y). Views were written y-up from a y-down origin, and notes y-down, so the two did not line up. Hidden lines are only written when the view shows them.
+- **Hidden lines** are centred with the visible outline (they had their own centre and could sit shifted).
+- **Projects drag-and-drop**: dragging a design tile onto the viewport now starts a real OS drag from C++ (`ProjectBrowser::startDrag`). The 1.13.38 fix still bound `Drag.active` to the MouseArea; the drag blocks until the drop, which looped the binding and Qt cancelled the drag.
+- **Projects panel**: while a design opens, its progress shows along the bottom of the panel. The status-bar bar sat under the panel's dim and looked greyed out.
+- **Manufacture panel**: its content was wider than the panel (the tab bar took 520 px of 400), which hid the ✕ and the Finish tab. It fits now. Going back to Design closes the panel; Render already did.
+- **Lighter start**:
+  - WebEngine (Chromium) is no longer loaded at startup. The exe does not link it; the McMaster dialog's `import QtWebEngine` loads it on first use, and startup only sets `AA_ShareOpenGLContexts`. About 15–20 fewer DLLs at launch.
+  - `scripts/package-windows.ps1` leaves out what Fission never uses: Quick Controls styles other than Basic, the QML debugger plugins, the D3D12 shader compiler, and WebEngine DevTools resources. That is 1150 files and about 38 MB (12 %) of the package.
+- **UI test**: `FISSION_UITEST_ONLY=panels` (drawing dimensions, notes, PDF/DXF export, Manufacture panel) and `=mcmaster` (WebEngine on demand) run a short script instead of the whole walkthrough.
+- `--selftest` **427 passed, 0 failed**; `panels` 5/5, `mcmaster` 1/1.
+
+### 1.13.38 — Projects drag-and-drop, Fusion linked designs, sharper icons
+- **Projects drag-and-drop**: dragging a design tile from the Projects panel onto the viewport inserts it as a linked design again. The tile's press was taken by the grid (vertical flick) or the drawer (swipe to close) before the drag started. The tile now keeps the press, and the drawer no longer closes on a swipe; it still closes with Esc, a click outside, or when the drag starts.
+- **Fusion linked designs (exporter 1.9)**:
+  - The export records where the design lives in Fusion (`metadata.fusionFile`: project, folders, name, version).
+  - Each timeline row that inserts another cloud design records the referenced file (`link`: project, folders, name, version, referenced version, out-of-date flag).
+  - Fission resolves that to `<projects folder>/<project>/<folders>/<name>.f360` relative to the open file, or to the same folder for a flat export. It lists the insert under **Linked Designs** with "Fusion vN", or "original not exported" when that file is not there. Open Original opens it and Unlink drops the link.
+  - The inserted geometry is still Fusion's snapshot, so there is no Update from Original for these yet.
+  - Selftest: three inserts resolve in the same project, in another project, and to a missing file.
+- **Fusion import**: `fusionGroup` (and `fusionLink`) are now kept on mapped chips too (Extrude, Fillet, …), not only on pass-through ones.
+- **Delete Face glyph**: the box's top face is tinted red and crossed out with a red X (was a dashed outline and a minus). Remove keeps its X beside a whole box.
+- `--selftest` **427 passed, 0 failed**.
+- **Glyph strokes**: 1.25 px instead of 1.6 px, drawn half a pixel off the grid so lines sit on pixel centres. At 100 % scaling every icon was a two-pixel smear; now each line has a one-pixel core. This applies to every glyph: ribbon, browser and timeline.
+
 ### 1.13.37 — Fusion timeline order, Delete Face, timeline wheel
 - **Fusion exporter 1.8** (`F3D_Bulk_Export`):
   - Collapsed timeline groups are expanded for the export and collapsed again afterwards. A collapsed group is one timeline row in Fusion's API, and its children have no index. Exporters up to 1.7 never wrote those children as rows and could not roll the marker into them.

@@ -441,8 +441,9 @@ Rectangle {
                             required property var modelData
                             glyph: "design"
                             glyphColor: modelData.outOfDate ? "#d89a2b" : Theme.accent
-                            label: modelData.name + (modelData.missing ? "  (original missing)"
-                                                     : modelData.outOfDate ? "  (out of date)" : "")
+                            label: modelData.name + (modelData.missing ? (modelData.fusion ? "  (original not exported)" : "  (original missing)")
+                                                     : modelData.outOfDate ? "  (out of date)"
+                                                     : modelData.fusion ? "  (Fusion v" + modelData.fusionVersion + ")" : "")
                             bad: modelData.missing
                             onDoubleClicked: if (modelData.outOfDate) browser.app.updateLinkedDesign(modelData.featureId)
                             onContextMenu: (x, y) => linkMenu.openFor(modelData)
@@ -668,7 +669,9 @@ Rectangle {
             onTriggered: browser.app.unlinkDesign(linkMenu.target.featureId)
         }
         MenuItem {
+            // A Fusion insert is a step of Fusion's history; later snapshots still contain its parts
             text: "Delete Insert"
+            enabled: !!linkMenu.target && !linkMenu.target.fusion
             onTriggered: {
                 const f = browser.doc.featureById(linkMenu.target.featureId)
                 if (f) browser.app.deleteFeature(f)

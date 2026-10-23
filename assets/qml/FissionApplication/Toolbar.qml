@@ -443,10 +443,22 @@ Rectangle {
                 act("Fit Sheet", "view", () => app.drawingWorkspace && app.drawingWorkspace.fitSheet(),
                     "Reset pan/zoom to fit the sheet (F)")
             ] },
+            // Dimensions anchor on projected model edges: pick lines, arcs, circles or corners, then place
+            { title: "DIMENSIONS", quick: 4, items: [
+                act("Dimension", "dimension", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("dimension"),
+                    "Dimension (D): a line gives its length, two lines their distance or angle, an arc its radius, a circle its diameter"),
+                act("Linear", "dimlinear", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("linear"),
+                    "Horizontal or vertical distance, chosen by where you place it"),
+                act("Aligned", "dimaligned", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("aligned"),
+                    "True distance between two picks, along the line that joins them"),
+                act("Angular", "dimangular", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("angular"),
+                    "Angle between two lines; place it in the angle you want"),
+                act("Radius", "dimradius", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("radius"),
+                    "Radius of an arc or circle"),
+                act("Diameter", "dimdiameter", () => app.drawingWorkspace && app.drawingWorkspace.beginDimensionMode("diameter"),
+                    "Diameter of a circle or arc")
+            ] },
             { title: "ANNOTATE", quick: 3, items: [
-                act("Dimension", "measure", () => {
-                    if (app.drawingWorkspace) app.drawingWorkspace.beginDimensionMode()
-                }, "Drag on the sheet to place a linear dimension"),
                 act("Text", "script", () => {
                     if (app.drawingWorkspace) app.drawingWorkspace.beginTextMode()
                 }, "Click to place a text note"),
@@ -478,7 +490,10 @@ Rectangle {
                     "Arrange the views on the sheet"),
                 act("Hidden Lines", "section", () => app.drawingWorkspace && app.drawingWorkspace.toggleHiddenLines(),
                     "Toggle hidden lines for new views and the selected view"),
-                act("Back to Design", "finish", () => app.leaveDrawing(), "Leave the drawing and return to the design")
+                act("Title Block", "parameters", () => app.drawingWorkspace && app.drawingWorkspace.toggleTitleBlock(),
+                    "Show or delete the title block (click it on the sheet to edit its fields)"),
+                act("Back to Design", "finish", () => app.leaveDrawingThen(() => app.leaveDrawing()),
+                    "Leave the drawing and return to the design")
             ] }
         ]
     })
@@ -680,19 +695,19 @@ Rectangle {
                             text: "Design"
                             checkable: true
                             checked: !!(toolbar.app && toolbar.app.workspace === "design" && !toolbar.app.inDrawing)
-                            onTriggered: toolbar.app.enterDesignWorkspace()
+                            onTriggered: toolbar.app.leaveDrawingThen(() => toolbar.app.enterDesignWorkspace())
                         }
                         MenuItem {
                             text: "Render"
                             checkable: true
                             checked: !!(toolbar.app && toolbar.app.workspace === "render" && !toolbar.app.inDrawing)
-                            onTriggered: toolbar.app.enterRenderWorkspace()
+                            onTriggered: toolbar.app.leaveDrawingThen(() => toolbar.app.enterRenderWorkspace())
                         }
                         MenuItem {
                             text: "Manufacture"
                             checkable: true
                             checked: !!(toolbar.app && toolbar.app.workspace === "manufacture" && !toolbar.app.inDrawing)
-                            onTriggered: toolbar.app.enterManufactureWorkspace()
+                            onTriggered: toolbar.app.leaveDrawingThen(() => toolbar.app.enterManufactureWorkspace())
                         }
                         MenuSeparator {}
                         MenuItem {
@@ -703,10 +718,7 @@ Rectangle {
                         MenuItem {
                             text: "Back to Design"
                             enabled: !!(toolbar.app && toolbar.app.inDrawing)
-                            onTriggered: {
-                                toolbar.app.leaveDrawing()
-                                toolbar.app.enterDesignWorkspace()
-                            }
+                            onTriggered: toolbar.app.leaveDrawingThen(() => toolbar.app.enterDesignWorkspace())
                         }
                     }
                 }

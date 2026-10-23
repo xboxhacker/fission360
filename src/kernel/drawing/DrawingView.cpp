@@ -3,6 +3,7 @@
 #include "DrawingView.h"
 #include <QJsonArray>
 #include <algorithm>
+#include <cmath>
 
 DrawingView::DrawingView(const QString &id, const QString &type, QObject *parent)
     : QObject(parent)
@@ -122,9 +123,10 @@ void DrawingView::setDetailCenter(const QPointF &c)
 }
 
 void DrawingView::setCurves(const QVariantList &visible, const QVariantList &hidden, const QVariantList &section,
-                            double widthMm, double heightMm)
+                            double widthMm, double heightMm, const QVariantList &edges)
 {
     m_visible = visible;
+    m_edges = edges;
     m_hidden = hidden;
     m_section = section;
     m_width = std::max(20.0, widthMm > 0 ? widthMm : 80.0);
@@ -159,6 +161,7 @@ QJsonObject DrawingView::toJson() const
         {QStringLiteral("visibleCurves"), QJsonArray::fromVariantList(m_visible)},
         {QStringLiteral("hiddenCurves"), QJsonArray::fromVariantList(m_hidden)},
         {QStringLiteral("sectionCurves"), QJsonArray::fromVariantList(m_section)},
+        {QStringLiteral("edges"), QJsonArray::fromVariantList(m_edges)},
     };
 }
 
@@ -198,6 +201,81 @@ DrawingView *DrawingView::fromJson(const QJsonObject &obj, QObject *parent)
                     obj.value(QStringLiteral("hiddenCurves")).toArray().toVariantList(),
                     obj.value(QStringLiteral("sectionCurves")).toArray().toVariantList(),
                     obj.value(QStringLiteral("width")).toDouble(),
-                    obj.value(QStringLiteral("height")).toDouble());
+                    obj.value(QStringLiteral("height")).toDouble(),
+                    obj.value(QStringLiteral("edges")).toArray().toVariantList());
     return view;
+}
+
+QPointF DrawingView::toSheet(double x, double y) const
+{
+    // Curves are about the view centre with y up; the sheet is in mm from the top left with y down
+    return QPointF(m_position.x() + m_width * m_scale * 0.5 + x * m_scale,
+                   m_position.y() + m_height * m_scale * 0.5 - y * m_scale);
+}
+
+QVariantMap DrawingView::pickEdge(double sheetX, double sheetY, double tolMm) const
+{
+    if (m_edges.isEmpty() || m_scale <= 0) return {};
+    const double cx = m_position.x() + m_width * m_scale * 0.5;
+    const double cy = m_position.y() + m_height * m_scale * 0.5;
+    const double lx = (sheetX - cx) / m_scale, ly = -(sheetY - cy) / m_scale;
+    const double tol = tolMm / m_scale;
+
+    // Nearest segment, and through its "e" the edge
+    int best = -1;
+    double bestD = tol;
+    auto scan = [&](const QVariantList &segs) {
+        for (const QVariant &v : segs) {
+            const QVariantMap s = v.toMap();
+            if (!s.contains(QStringLiteral("e"))) continue;
+            const double x1 = s.value("x1").toDouble(), y1 = s.value("y1").toDouble();
+            const double dx = s.value("x2").toDouble() - x1, dy = s.value("y2").toDouble() - y1;
+            const double len2 = dx * dx + dy * dy;
+            const double t = len2 > 0 ? std::clamp(((lx - x1) * dx + (ly - y1) * dy) / len2, 0.0, 1.0) : 0.0;
+            const double d = std::hypot(lx - (x1 + t * dx), ly - (y1 + t * dy));
+            if (d < bestD) { bestD = d; best = s.value("e").toInt(); }
+        }
+    };
+    scan(m_visible);
+    if (m_showHidden) scan(m_hidden);
+
+    // End points and circle centres snap first, a little tighter than the edges
+    QPointF snap;
+    double snapD = tol * 0.7;
+    bool snapped = false;
+    for (const QVariant &v : m_edges) {
+        const QVariantMap e = v.toMap();
+        if (e.value("hidden").toBool() && !m_showHidden) continue;
+        QList<QPointF> pts{{e.value("x1").toDouble(), e.value("y1").toDouble()},
+                           {e.value("x2").toDouble(), e.value("y2").toDouble()}};
+        if (e.value("type").toString() == QLatin1String("circle"))
+            pts << QPointF(e.value("cx").toDouble(), e.value("cy").toDouble());
+        for (const QPointF &p : pts) {
+            const double d = std::hypot(lx - p.x(), ly - p.y());
+            if (d < snapD) { snapD = d; snap = p; snapped = true; }
+        }
+    }
+    if (snapped) {
+        const QPointF s = toSheet(snap.x(), snap.y());
+        return {{"kind", "point"}, {"viewId", m_id}, {"x", s.x()}, {"y", s.y()}};
+    }
+    if (best < 0 || best >= m_edges.size()) return {};
+
+    const QVariantMap e = m_edges[best].toMap();
+    const QString type = e.value("type").toString();
+    QVariantMap out{{"edge", best}, {"viewId", m_id}};
+    const QPointF a = toSheet(e.value("x1").toDouble(), e.value("y1").toDouble());
+    const QPointF b = toSheet(e.value("x2").toDouble(), e.value("y2").toDouble());
+    out["x1"] = a.x(); out["y1"] = a.y(); out["x2"] = b.x(); out["y2"] = b.y();
+    if (type == QLatin1String("circle")) {
+        const QPointF c = toSheet(e.value("cx").toDouble(), e.value("cy").toDouble());
+        out["kind"] = QStringLiteral("circle");
+        out["cx"] = c.x(); out["cy"] = c.y();
+        out["r"] = e.value("r").toDouble() * m_scale;
+        out["full"] = e.value("full").toBool();
+    } else {
+        // A free-form curve is measured by its chord, like a line between its end points
+        out["kind"] = QStringLiteral("line");
+    }
+    return out;
 }

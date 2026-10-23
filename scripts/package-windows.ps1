@@ -27,6 +27,22 @@ New-Item -ItemType Directory -Force $dst | Out-Null
 robocopy $src $dst /E /XD CMakeFiles /XF *.pdb *.ilk *.exp *.lib *.previous.exe /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
 
+# windeployqt ships more than Fission uses. Leave out:
+#  - Quick Controls styles other than Basic (main.cpp sets Basic; no QML imports a style)
+#  - the QML debugger plugins
+#  - the D3D12 shader compiler (the app renders with OpenGL). D3Dcompiler_47.dll stays: Chromium in the
+#    McMaster browser uses it. opengl32sw.dll stays: it is the fallback on PCs without an OpenGL driver.
+#  - WebEngine's DevTools resources (no inspector in the McMaster browser)
+$styles = "FluentWinUI3", "Fusion", "Imagine", "Material", "Universal", "Windows"
+foreach ($s in $styles) {
+    Remove-Item (Join-Path $dst "qml\QtQuick\Controls\$s") -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $dst -Filter "Qt6QuickControls2$s*.dll" | Remove-Item -Force
+}
+Remove-Item (Join-Path $dst "qmltooling") -Recurse -Force -ErrorAction SilentlyContinue
+foreach ($f in "dxcompiler.dll", "dxil.dll", "resources\qtwebengine_devtools_resources.pak") {
+    Remove-Item (Join-Path $dst $f) -Force -ErrorAction SilentlyContinue
+}
+
 # Safety net: pull a complete OCCT runtime if the build tree is missing TKBRep.dll etc.
 function Find-OrcaRoot {
     foreach ($c in @(

@@ -15,6 +15,7 @@
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -33,6 +34,10 @@
 #include <BRepTools.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <QElapsedTimer>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <QMap>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
@@ -957,6 +962,8 @@ bool FissionReplaceFace::compute(RebuildContext &ctx) {
     return true;
 }
 
+constexpr int kDeleteFaceMs = 15000;
+
 bool FissionDeleteFace::compute(RebuildContext &ctx) {
     QString err;
     QMap<int, QList<TopoDS_Face>> byBody;
@@ -972,18 +979,54 @@ bool FissionDeleteFace::compute(RebuildContext &ctx) {
         --it;
         const TopoDS_Shape shape = ctx.bodies[it.key()].shape;
         if (MeshUtils::isMesh(shape)) return fail("Delete Face works on solid bodies, not meshes");
-        BRepAlgoAPI_Defeaturing defeat;
-        defeat.SetShape(shape);
-        for (const TopoDS_Face &f : it.value()) defeat.AddFaceToRemove(f);
-        defeat.SetToFillHistory(Standard_False);
-        Handle(StepTimeLimit) limit = new StepTimeLimit(20000);
-        defeat.Build(limit->Start());
-        if (limit->expired()) return fail("Delete Face took longer than 20 s and was stopped");
-        if (!defeat.IsDone() || defeat.Shape().IsNull() || GeomUtils::solids(defeat.Shape()).isEmpty())
-            return fail("The faces around it cannot close the gap, so this face cannot be deleted");
-        if (!BRepCheck_Analyzer(defeat.Shape()).IsValid())
-            return fail("Deleting this face leaves an invalid solid");
-        replaceBody(ctx, it.key(), defeat.Shape(), id());
+        // OCCT's defeaturing only checks for cancel between its stages, and on helical (thread) faces one
+        // stage ran for minutes. It works on a copy in a worker thread; after kDeleteFaceMs the feature gives
+        // up and the worker finishes on its own copy in the background.
+        BRepBuilderAPI_Copy copier(shape);
+        const TopoDS_Shape copy = copier.Shape();
+        TopTools_ListOfShape faces;
+        for (const TopoDS_Face &f : it.value()) {
+            const TopTools_ListOfShape &m = copier.Modified(f);
+            faces.Append(m.IsEmpty() ? TopoDS_Shape(f) : m.First());
+        }
+        struct Job {
+            std::mutex mutex;
+            std::condition_variable cv;
+            bool done = false;
+            TopoDS_Shape out;
+            QString error;
+        };
+        auto job = std::make_shared<Job>();
+        std::thread([job, copy, faces] {
+            TopoDS_Shape out;
+            QString error;
+            try {
+                BRepAlgoAPI_Defeaturing defeat;
+                defeat.SetShape(copy);
+                for (TopTools_ListOfShape::Iterator f(faces); f.More(); f.Next()) defeat.AddFaceToRemove(f.Value());
+                defeat.SetToFillHistory(Standard_False);
+                defeat.SetRunParallel(Standard_True);
+                defeat.Build();
+                if (!defeat.IsDone() || defeat.Shape().IsNull() || GeomUtils::solids(defeat.Shape()).isEmpty())
+                    error = QStringLiteral("The faces around it cannot close the gap, so this face cannot be deleted");
+                else if (!BRepCheck_Analyzer(defeat.Shape()).IsValid())
+                    error = QStringLiteral("Deleting this face leaves an invalid solid");
+                else
+                    out = defeat.Shape();
+            } catch (...) {
+                error = QStringLiteral("Delete Face failed in the geometry kernel");
+            }
+            std::lock_guard<std::mutex> lock(job->mutex);
+            job->out = out;
+            job->error = error;
+            job->done = true;
+            job->cv.notify_all();
+        }).detach();
+        std::unique_lock<std::mutex> lock(job->mutex);
+        if (!job->cv.wait_for(lock, std::chrono::milliseconds(kDeleteFaceMs), [&] { return job->done; }))
+            return fail("Delete Face took longer than 15 s and was stopped (OCCT cannot heal these faces quickly)");
+        if (!job->error.isEmpty()) return fail(job->error);
+        replaceBody(ctx, it.key(), job->out, id());
     }
     return true;
 }

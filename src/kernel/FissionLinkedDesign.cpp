@@ -147,6 +147,21 @@ QVariantList FissionDocument::linkedDesigns() const {
     QVariantList out;
     for (auto *f : m_timeline->features()) {
         if (f->type() != QLatin1String("ImportCAD")) continue;
+        // A design Fusion inserted into this one. Its geometry is Fusion's snapshot, so it can be opened
+        // but not updated from the Fission export of the original.
+        const QVariantMap fusion = f->get("fusionLink").toMap();
+        if (!fusion.isEmpty()) {
+            const QString path = fusion.value("path").toString();
+            out << QVariantMap{{"featureId", f->id()},
+                               {"name", f->name()},
+                               {"sourceName", fusion.value("name")},
+                               {"path", path},
+                               {"fusion", true},
+                               {"fusionVersion", fusion.value("referencedVersion", fusion.value("version"))},
+                               {"missing", !QFileInfo::exists(path)},
+                               {"outOfDate", false}};
+            continue;
+        }
         const QVariantMap link = f->get("link").toMap();
         if (link.isEmpty()) continue;
         const QString path = link.value("path").toString();
@@ -204,11 +219,12 @@ bool FissionDocument::updateLinkedDesign(const QString &featureId) {
 void FissionDocument::unlinkDesign(const QString &featureId) {
     FissionFeature *f = featureById(featureId);
     if (!f) return;
-    const QVariantMap link = f->get("link").toMap();
+    const char *key = f->get("link").toMap().isEmpty() ? "fusionLink" : "link";
+    const QVariantMap link = f->get(key).toMap();
     if (link.isEmpty()) return;
     checkpoint();
     QVariantMap props = f->props();
-    props.remove("link");
+    props.remove(key);
     props.insert("linkedFrom", link.value("name"));
     f->m_props = props;
     emit f->changed();

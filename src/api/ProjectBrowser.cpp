@@ -5,9 +5,12 @@
 #include "kernel/FissionDocument.h"
 #include <QDir>
 #include <QDirIterator>
+#include <QDrag>
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+#include <QMimeData>
+#include <QPixmap>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
@@ -90,6 +93,24 @@ QVariantList ProjectBrowser::folders() const {
     for (const QString &p : found)
         out << QVariantMap{{"path", p}, {"label", QFileInfo(m_root).fileName() + "/" + QDir(m_root).relativeFilePath(p)}};
     return out;
+}
+
+bool ProjectBrowser::startDrag(const QString &path) {
+    const QFileInfo fi(path);
+    if (!fi.isFile()) return false;
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl::fromLocalFile(fi.absoluteFilePath())});
+    auto *drag = new QDrag(this);
+    drag->setMimeData(mime);
+    const QString thumb = thumbnail(path);
+    QPixmap pix;
+    if (thumb.startsWith(QLatin1String("data:image/png;base64,"))
+        && pix.loadFromData(QByteArray::fromBase64(thumb.mid(22).toLatin1()), "PNG")) {
+        pix = pix.scaled(120, 75, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        drag->setPixmap(pix);
+        drag->setHotSpot(QPoint(pix.width() / 2, pix.height() / 2));
+    }
+    return drag->exec(Qt::CopyAction) != Qt::IgnoreAction;
 }
 
 QString ProjectBrowser::thumbnail(const QString &path) {

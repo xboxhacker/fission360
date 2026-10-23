@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Fission360 VERSION 1.13.37 LANGUAGES CXX)
+project(Fission360 VERSION 1.13.40 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -120,11 +120,27 @@ target_link_libraries(Fission360 PRIVATE
     ${OCCT_LIBS}
     ${OCCT_OBJECT_LIBS}
     Qt6::Core Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Test
-    Qt6::WebEngineQuick
+    # Not Qt6::WebEngineQuick: the McMaster dialog's "import QtWebEngine" loads Chromium on first use, and
+    # windeployqt still ships it because it scans the QML imports
     opengl32 glu32
 )
 
 target_compile_definitions(Fission360 PRIVATE FISSION_VERSION="${PROJECT_VERSION}")
+
+# Python scripts and add-ins (PythonHost): built against CPython's stable ABI (python3.lib, 3.11+), with
+# python3.dll delay-loaded from the user's own Python at run time, so Fission still starts without Python.
+# Without Python headers on the build machine the Scripts dialog says Python support was not built in.
+find_package(Python3 3.11 COMPONENTS Development.Module QUIET)
+if(Python3_Development.Module_FOUND AND WIN32)
+    target_include_directories(Fission360 PRIVATE ${Python3_INCLUDE_DIRS})
+    target_link_directories(Fission360 PRIVATE ${Python3_LIBRARY_DIRS})
+    target_compile_definitions(Fission360 PRIVATE FISSION_HAS_PYTHON Py_LIMITED_API=0x030B0000)
+    target_link_libraries(Fission360 PRIVATE delayimp)
+    target_link_options(Fission360 PRIVATE "/DELAYLOAD:python3.dll")
+    message(STATUS "Python scripting: stable ABI from ${Python3_INCLUDE_DIRS}")
+else()
+    message(STATUS "Python scripting: off (no Python 3.11+ development files found)")
+endif()
 set(QT_BIN_DIR "${QT_DIR}/bin")
 
 # App / brand icons (window icon, Send to Orca, …)

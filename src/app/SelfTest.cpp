@@ -33,6 +33,7 @@
 #include <QImage>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QMap>
 #include <QEventLoop>
 #include <limits>
 #include <QFile>
@@ -50,7 +51,9 @@
 #undef near   // windows.h, via OCCT
 #include <BRepGProp.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -532,6 +535,76 @@ void testFusionTimelinePairing() {
     FissionFeature *joint = doc.timeline()->features().value(2);
     const QString jointType = joint ? joint->get("fusionType").toString() : QString();
     check(jointType == "adsk::fusion::Joint", "fusion pairing: an unmapped row keeps its Fusion type", jointType);
+
+    // Linked designs (exporter 1.9): the export of the inserted design is found at the same project / folder
+    // path as in Fusion, relative to this file
+    const QString root = dir.filePath("Projects");
+    QDir().mkpath(root + "/Cart/Assemblies");
+    QDir().mkpath(root + "/Cart/Parts");
+    QDir().mkpath(root + "/Hardware");
+    for (const QString &p : {root + "/Cart/Parts/Bracket.f360", root + "/Hardware/Bolt.f360"}) {
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write("{}");
+    }
+    auto occ = [](int i, const QString &name, const QString &project, const QJsonArray &folders) {
+        return QJsonObject{{"index", i}, {"type", "adsk::fusion::Occurrence"}, {"name", name + ":1"},
+                           {"link", QJsonObject{{"name", name}, {"project", project}, {"folders", folders},
+                                                {"version", 4}, {"referencedVersion", 3}}}};
+    };
+    const QJsonObject host{
+        {"metadata", QJsonObject{{"exportedFrom", "Fusion 360"}, {"exporterVersion", "1.9"},
+                                 {"fusionFile", QJsonObject{{"name", "Cart"}, {"project", "Cart"},
+                                                            {"folders", QJsonArray{"Assemblies"}}}}}},
+        {"document", QJsonObject{{"name", "Cart"}}},
+        {"timeline", QJsonArray{occ(0, "Bracket", "Cart", {"Parts"}), occ(1, "Bolt", "Hardware", {}),
+                                occ(2, "Missing", "Cart", {"Parts"})}},
+        {"features", QJsonArray{}}, {"sketches", QJsonArray{}}, {"bodies", QJsonArray{}}};
+    const QString hostPath = root + "/Cart/Assemblies/Cart.f360";
+    {
+        QFile f(hostPath);
+        f.open(QIODevice::WriteOnly);
+        f.write(QJsonDocument(host).toJson());
+    }
+    FissionDocument cart;
+    check(cart.load(hostPath), "fusion links: file loads", cart.lastError());
+    const QVariantList links = cart.linkedDesigns();
+    QStringList got2;
+    for (const QVariant &v : links) {
+        const QVariantMap l = v.toMap();
+        got2 << QDir(root).relativeFilePath(l.value("path").toString()) + (l.value("missing").toBool() ? " missing" : "")
+                    + (l.value("fusion").toBool() ? "" : " not-fusion");
+    }
+    check(got2 == QStringList{"Cart/Parts/Bracket.f360", "Hardware/Bolt.f360", "Cart/Parts/Missing.f360 missing"},
+          "fusion links: inserted designs resolve by project and folder, across projects too", got2.join(", "));
+
+    // Units: Fusion's API is in cm whatever the design uses. An inch design opens in inches, and a 1 in line
+    // (2.54 cm from the API) is 25.4 mm in the kernel, on its sketch frame 0.5 cm above XY.
+    const QJsonObject inch{
+        {"metadata", QJsonObject{{"exportedFrom", "Fusion 360"}, {"exporterVersion", "1.10"}}},
+        {"document", QJsonObject{{"name", "Inch"}, {"units", "in"}, {"geometryUnits", "cm"}}},
+        {"timeline", QJsonArray{QJsonObject{{"index", 0}, {"type", "adsk::fusion::Sketch"}, {"name", "Sketch1"}}}},
+        {"sketches", QJsonArray{QJsonObject{
+            {"name", "Sketch1"}, {"timelineIndex", 0},
+            {"frame", QJsonObject{{"origin", QJsonArray{0, 0, 0.5}}, {"x", QJsonArray{1, 0, 0}}, {"y", QJsonArray{0, 1, 0}}}},
+            {"curves", QJsonArray{QJsonObject{{"type", "line"}, {"start", QJsonArray{0, 0, 0}}, {"end", QJsonArray{2.54, 0, 0}}}}}}}},
+        {"features", QJsonArray{}}, {"bodies", QJsonArray{}}};
+    const QString inchPath = dir.filePath("inch.f360");
+    {
+        QFile f(inchPath);
+        f.open(QIODevice::WriteOnly);
+        f.write(QJsonDocument(inch).toJson());
+    }
+    FissionDocument in;
+    check(in.load(inchPath), "fusion units: file loads", in.lastError());
+    FissionFeature *sk = in.timeline()->features().value(0);
+    const QVariantMap line = sk ? sk->get("entities").toList().value(0).toMap() : QVariantMap();
+    const QVariantMap frame = sk ? sk->get("plane").toMap() : QVariantMap();
+    check(in.lengthUnit() == "in" && near(line.value("x2").toDouble(), 25.4, 1e-9)
+              && near(frame.value("origin").toList().value(2).toDouble(), 5, 1e-9) && sk && sk->isHealthy(),
+          "fusion units: an inch design opens in inches; a 1 in Fusion line is 25.4 mm on its own sketch frame",
+          QString("%1 x2=%2 z=%3 %4").arg(in.lengthUnit()).arg(line.value("x2").toDouble())
+              .arg(frame.value("origin").toList().value(2).toDouble()).arg(sk ? sk->error() : "no sketch"));
 }
 
 void testPatternsAndMirror() {
@@ -2207,6 +2280,31 @@ void testResultCacheSkipsRebuild() {
               .arg(opened.rebuildCount()).arg(status(&opened)));
 }
 
+// Version history shares large feature data with the design instead of copying it into every version, and
+// open does not parse the history at all
+void testHistoryBlobs() {
+    QTemporaryDir dir;
+    const QString path = dir.filePath("blobs.f360");
+    FissionDocument doc;
+    extrude(&doc, rectSketch(&doc, "XY", 0, 0, 10, 10), "10 mm", "newBody");
+    FissionFeature *f = doc.timeline()->features().value(1);
+    const QString big(300000, QLatin1Char('A'));
+    f->set("bulk", big);
+    check(doc.save(path), "history blobs: first save", doc.lastError());
+    f->set("distance", "12 mm");
+    check(doc.save(path), "history blobs: second save", doc.lastError());
+    const qint64 size = QFileInfo(path).size();
+    check(size < 300000 * 2, "history blobs: the large string is stored once, not once per version",
+          QString::number(size));
+    FissionDocument back;
+    check(back.load(path), "history blobs: reopen", back.lastError());
+    const QVariantList versions = back.versionHistory();
+    check(versions.size() >= 1, "history blobs: versions are listed after a lazy open", QString::number(versions.size()));
+    const int first = versions.value(0).toMap().value("version").toInt();
+    check(back.revertToVersion(first) && back.timeline()->features().value(1)->get("bulk").toString() == big,
+          "history blobs: reverting restores the shared data from the design", back.lastError());
+}
+
 void testLargeFileSave() {
     if (!QCoreApplication::instance()) return;
     QTemporaryDir dir;
@@ -3436,6 +3534,7 @@ int run() {
     testDrawing();
     testResultCacheSkipsRebuild();
     testLargeFileSave();
+    testHistoryBlobs();
     testDocumentVersionsAndAutosave();
     testGifWriter();
     testViewportBackground();
@@ -3473,6 +3572,86 @@ int stepBench(const QString &path) {
         }
     }
     std::printf("%d planar-face failures\n", failures);
+    return failures ? 1 : 0;
+}
+
+// Every solid tool on every face / edge / body of an imported file (--toolbench), with a per-tool summary.
+// TOOLBENCH_MAX caps the faces and edges tried per body (default 40). Each run is removed again, so every
+// tool works on the imported body as it came in.
+int toolBench(const QString &path) {
+    FissionDocument doc;
+    const bool native = path.endsWith(".f360", Qt::CaseInsensitive);
+    if (native ? !doc.load(path) : doc.importCAD(path).isEmpty()) {
+        std::printf("open failed: %s\n", qPrintable(doc.lastError()));
+        return 1;
+    }
+    const int cap = qEnvironmentVariableIntValue("TOOLBENCH_MAX") > 0 ? qEnvironmentVariableIntValue("TOOLBENCH_MAX") : 40;
+    std::printf("%s: %d bodies\n", qPrintable(QFileInfo(path).fileName()), doc.bodyCount());
+    struct Tally { int ok = 0, total = 0; double worstMs = 0; QStringList errors; };
+    QMap<QString, Tally> tally;
+    QElapsedTimer clock;
+    auto run = [&](const QString &tool, const QString &type, const QVariantMap &props) {
+        clock.start();
+        FissionFeature *f = doc.addFeature(type, props);
+        const double ms = clock.elapsed();
+        Tally &t = tally[tool];
+        ++t.total;
+        t.worstMs = std::max(t.worstMs, ms);
+        const bool ok = f && f->isHealthy();
+        if (ok) ++t.ok;
+        else if (t.errors.size() < 4) t.errors << (f ? f->error() : QStringLiteral("not created"));
+        if (ms > 5000) std::printf("  slow: %s %.0f ms\n", qPrintable(tool), ms);
+        if (f) doc.removeFeature(f);
+        std::fflush(stdout);
+    };
+    for (int b = 0; b < doc.bodyCount(); ++b) {
+        const TopoDS_Shape body = doc.body(b)->shape();
+        if (MeshUtils::isMesh(body)) continue;
+        const auto faces = GeomUtils::faceMap(body);
+        TopTools_IndexedMapOfShape edges;
+        TopExp::MapShapes(body, TopAbs_EDGE, edges);
+        std::printf("body %d: %d faces, %d edges, valid %d\n", b, faces.Extent(), edges.Extent(),
+                    int(BRepCheck_Analyzer(body).IsValid()));
+        std::fflush(stdout);
+        // Faces and edges spread evenly over the body (the first ones are often all one feature, e.g. a thread)
+        const int faceStep = std::max(1, faces.Extent() / cap), edgeStep = std::max(1, edges.Extent() / cap);
+        for (int i = 0; i < faces.Extent(); i += faceStep) {
+            const TopoDS_Face face = TopoDS::Face(faces(i + 1));
+            const BRepAdaptor_Surface s(face);
+            const QVariantMap ref = GeomUtils::faceRef(b, body, i);
+            const gp_Pnt c = GeomUtils::faceCentroid(face);
+            if (s.GetType() == GeomAbs_Plane) {
+                run("extrude join", "Extrude", {{"profiles", QVariantList{ref}}, {"distance", "2 mm"}, {"operation", "join"}});
+                run("extrude cut", "Extrude", {{"profiles", QVariantList{ref}}, {"distance", "-0.5 mm"}, {"operation", "cut"}});
+                run("hole", "Hole", {{"face", ref}, {"center", QVariantList{c.X(), c.Y(), c.Z()}}, {"diameter", "1 mm"},
+                                     {"depth", "0.5 mm"}});
+                const gp_Dir n = s.Plane().Axis().Direction();
+                if (std::fabs(n.Z()) < 0.9) run("draft", "Draft", {{"faces", QVariantList{ref}}, {"plane", "XY"}, {"angle", "2 deg"}});
+            }
+            if (s.GetType() == GeomAbs_Cylinder) run("thread", "Thread", {{"face", ref}});
+            run("offset face", "OffsetFace", {{"faces", QVariantList{ref}}, {"distance", "0.2 mm"}});
+            run("delete face", "DeleteFace", {{"faces", QVariantList{ref}}});
+            run("shell", "Shell", {{"faces", QVariantList{ref}}, {"body", b}, {"thickness", "0.3 mm"}});
+        }
+        for (int i = 0; i < edges.Extent(); i += edgeStep) {
+            const QVariantMap ref = GeomUtils::edgeRef(b, body, i);
+            run("fillet", "Fillet", {{"edges", QVariantList{ref}}, {"radius", "0.2 mm"}});
+            run("chamfer", "Chamfer", {{"edges", QVariantList{ref}}, {"distance", "0.2 mm"}});
+        }
+        run("move", "Move", {{"bodies", QVariantList{b}}, {"translate", QVariantList{"5 mm", "0 mm", "0 mm"}}});
+        run("scale", "Scale", {{"bodies", QVariantList{b}}, {"scale", "1.1"}});
+        run("mirror", "Mirror", {{"bodies", QVariantList{b}}, {"plane", "YZ"}, {"operation", "newBody"}});
+        run("shell (hollow)", "Shell", {{"faces", QVariantList{}}, {"body", b}, {"thickness", "0.3 mm"}});
+        run("fillet (all edges)", "Fillet", {{"allEdges", true}, {"body", b}, {"radius", "0.2 mm"}});
+    }
+    std::printf("\n%-20s %8s %10s  first errors\n", "tool", "ok", "worst ms");
+    int failures = 0;
+    for (auto it = tally.cbegin(); it != tally.cend(); ++it) {
+        failures += it->total - it->ok;
+        std::printf("%-20s %3d/%-4d %10.0f  %s\n", qPrintable(it.key()), it->ok, it->total, it->worstMs,
+                    qPrintable(it->errors.join(" | ").left(160)));
+    }
+    std::fflush(stdout);
     return failures ? 1 : 0;
 }
 

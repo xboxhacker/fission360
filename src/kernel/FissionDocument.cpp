@@ -19,8 +19,10 @@
 #include <algorithm>
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <cstring>
 #include <QImage>
 #include <BRepTools.hxx>
+#include <BinTools.hxx>
 #include <BRep_Builder.hxx>
 #include <sstream>
 #include <BRepAdaptor_Surface.hxx>
@@ -883,12 +885,145 @@ void FissionDocument::copyDrawingPayloadFromFile(const QString &path) {
         m_drawings = root.value(QStringLiteral("drawings")).toArray();
 }
 
+namespace {
+
+constexpr qsizetype kBlobMin = 64 * 1024;          // feature strings at least this long are shared, not copied
+constexpr qsizetype kHistoryBudget = 64 * 1024 * 1024;   // stored payload kept for older versions
+
+QString blobKey(const QString &value) {
+    const QByteArrayView bytes(reinterpret_cast<const char *>(value.constData()), value.size() * qsizetype(sizeof(QChar)));
+    return QStringLiteral("$blob:") + QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
+}
+
+// Feed a feature property into a hash without encoding it to JSON first (that encode was most of the time
+// spent on the open-cache key of a big design). Deterministic for the same content.
+void hashVariant(QCryptographicHash &h, const QVariant &v) {
+    switch (v.typeId()) {
+    case QMetaType::QVariantMap: {
+        const QVariantMap m = v.toMap();
+        for (auto it = m.cbegin(); it != m.cend(); ++it) {
+            h.addData(it.key().toUtf8());
+            h.addData(QByteArrayView("=", 1));
+            hashVariant(h, it.value());
+        }
+        h.addData(QByteArrayView("}", 1));
+        break;
+    }
+    case QMetaType::QVariantList:
+        for (const QVariant &e : v.toList()) hashVariant(h, e);
+        h.addData(QByteArrayView("]", 1));
+        break;
+    case QMetaType::QString: {
+        const QString s = v.toString();
+        h.addData(QByteArrayView(reinterpret_cast<const char *>(s.constData()), s.size() * qsizetype(sizeof(QChar))));
+        h.addData(QByteArrayView("\x01", 1));
+        break;
+    }
+    default:
+        h.addData(v.toString().toUtf8());
+        h.addData(QByteArrayView("\x02", 1));
+        break;
+    }
+}
+
+// Finds the value of a key of the top-level object in compact JSON text, without parsing the rest.
+// [valueFrom, valueTo) is the value; [keyFrom, keyTo) also covers the key and one separating comma.
+bool findTopLevelValue(const QByteArray &json, const QByteArray &key, qsizetype &keyFrom, qsizetype &keyTo,
+                       qsizetype &valueFrom, qsizetype &valueTo) {
+    const QByteArray needle = '"' + key + '"';
+    int depth = 0;
+    bool inString = false;
+    qsizetype stringStart = -1;
+    const char *d = json.constData();
+    const qsizetype n = json.size();
+    for (qsizetype i = 0; i < n; ++i) {
+        const char c = d[i];
+        if (inString) {
+            if (c == '\\') { ++i; continue; }
+            if (c != '"') continue;
+            inString = false;
+            // A key of the top-level object: "key" followed by ':'
+            if (depth == 1 && i + 1 - stringStart == needle.size()
+                && memcmp(d + stringStart, needle.constData(), size_t(needle.size())) == 0) {
+                qsizetype j = i + 1;
+                while (j < n && (d[j] == ' ' || d[j] == '\n' || d[j] == '\r' || d[j] == '\t')) ++j;
+                if (j >= n || d[j] != ':') continue;
+                ++j;
+                while (j < n && (d[j] == ' ' || d[j] == '\n' || d[j] == '\r' || d[j] == '\t')) ++j;
+                valueFrom = j;
+                if (j < n && (d[j] == '[' || d[j] == '{')) {          // array or object: to its matching close
+                    int vdepth = 0;
+                    bool vstr = false;
+                    for (; j < n; ++j) {
+                        const char v = d[j];
+                        if (vstr) { if (v == '\\') ++j; else if (v == '"') vstr = false; continue; }
+                        if (v == '"') vstr = true;
+                        else if (v == '[' || v == '{') ++vdepth;
+                        else if ((v == ']' || v == '}') && --vdepth == 0) { ++j; break; }
+                    }
+                } else if (j < n && d[j] == '"') {                    // string: to its closing quote
+                    for (++j; j < n; ++j) {
+                        if (d[j] == '\\') ++j;
+                        else if (d[j] == '"') { ++j; break; }
+                    }
+                } else {                                              // number, true, false, null
+                    while (j < n && d[j] != ',' && d[j] != '}') ++j;
+                }
+                valueTo = j;
+                keyFrom = stringStart;
+                keyTo = valueTo;
+                if (keyTo < n && d[keyTo] == ',') ++keyTo;                     // "key":value,
+                else if (keyFrom > 0 && d[keyFrom - 1] == ',') --keyFrom;      // ,"key":value}
+                return true;
+            }
+            continue;
+        }
+        if (c == '"') { inString = true; stringStart = i; }
+        else if (c == '{' || c == '[') ++depth;
+        else if (c == '}' || c == ']') --depth;
+    }
+    return false;
+}
+
+}  // namespace
+
+void FissionDocument::ensureHistory() const {
+    if (m_historyRaw.isEmpty()) return;
+    m_history = QJsonDocument::fromJson(m_historyRaw).array();
+    m_historyRaw.clear();
+}
+
+QByteArray FissionDocument::versionSnapshotJson(const QJsonObject &design) const {
+    QJsonObject obj = design;
+    QJsonObject timeline = obj.value(QStringLiteral("timeline")).toObject();
+    QJsonArray features = timeline.value(QStringLiteral("features")).toArray();
+    for (qsizetype i = 0; i < features.size(); ++i) {
+        QJsonObject f = features.at(i).toObject();
+        QJsonObject props = f.value(QStringLiteral("props")).toObject();
+        bool changed = false;
+        for (auto it = props.begin(); it != props.end(); ++it) {
+            if (!it.value().isString()) continue;
+            const QString v = it.value().toString();
+            if (v.size() < kBlobMin) continue;
+            it.value() = blobKey(v);
+            changed = true;
+        }
+        if (!changed) continue;
+        f.insert(QStringLiteral("props"), props);
+        features.replace(i, f);
+    }
+    timeline.insert(QStringLiteral("features"), features);
+    obj.insert(QStringLiteral("timeline"), timeline);
+    return QJsonDocument(obj).toJson(QJsonDocument::Compact);
+}
+
 QByteArray FissionDocument::snapshotJsonForHistory() const {
     // Versions and autosave skip thumbnail, nested history, and drawing bodies
     return QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
 }
 
 QVariantList FissionDocument::versionHistory() const {
+    ensureHistory();
     return DocumentVersionStore::historyMetaList(m_history);
 }
 
@@ -897,6 +1032,7 @@ bool FissionDocument::revertToVersion(int versionNumber) {
         m_lastError = QStringLiteral("No saved version to revert to");
         return false;
     }
+    ensureHistory();
     QByteArray raw;
     for (const QJsonValue &v : m_history) {
         const QJsonObject e = v.toObject();
@@ -909,10 +1045,39 @@ bool FissionDocument::revertToVersion(int versionNumber) {
         m_lastError = QStringLiteral("Could not load version %1").arg(versionNumber);
         return false;
     }
-    const QJsonObject obj = QJsonDocument::fromJson(raw).object();
+    QJsonObject obj = QJsonDocument::fromJson(raw).object();
     if (obj.isEmpty()) {
         m_lastError = QStringLiteral("Version %1 is not valid JSON").arg(versionNumber);
         return false;
+    }
+    // Large feature data is shared with the open design ("$blob:<sha1>"): take it back from there
+    if (raw.contains("\"$blob:")) {
+        QHash<QString, QString> blobs;
+        for (auto *f : m_timeline->features())
+            for (auto it = f->props().cbegin(); it != f->props().cend(); ++it)
+                if (it.value().typeId() == QMetaType::QString && it.value().toString().size() >= kBlobMin)
+                    blobs.insert(blobKey(it.value().toString()), it.value().toString());
+        QJsonObject timeline = obj.value(QStringLiteral("timeline")).toObject();
+        QJsonArray features = timeline.value(QStringLiteral("features")).toArray();
+        for (qsizetype i = 0; i < features.size(); ++i) {
+            QJsonObject f = features.at(i).toObject();
+            QJsonObject props = f.value(QStringLiteral("props")).toObject();
+            for (auto it = props.begin(); it != props.end(); ++it) {
+                const QString v = it.value().toString();
+                if (!v.startsWith(QLatin1String("$blob:"))) continue;
+                const auto found = blobs.constFind(v);
+                if (found == blobs.cend()) {
+                    m_lastError = QStringLiteral("Version %1 needs data that is no longer in this design (%2)")
+                                      .arg(versionNumber).arg(f.value(QStringLiteral("name")).toString());
+                    return false;
+                }
+                it.value() = *found;
+            }
+            f.insert(QStringLiteral("props"), props);
+            features.replace(i, f);
+        }
+        timeline.insert(QStringLiteral("features"), features);
+        obj.insert(QStringLiteral("timeline"), timeline);
     }
     checkpoint();
     const qint64 prevRev = m_contentRevision;
@@ -1601,8 +1766,12 @@ QByteArray FissionDocument::geometryKey() const {
     hash.addData(QByteArray::number(m_timeline->marker()));
     for (auto *p : m_parameters)
         hash.addData(QJsonDocument(p->toJson()).toJson(QJsonDocument::Compact));
-    for (auto *f : m_timeline->features())
-        hash.addData(QJsonDocument(f->toJson()).toJson(QJsonDocument::Compact));
+    for (auto *f : m_timeline->features()) {
+        hash.addData(f->type().toUtf8());
+        hash.addData(f->id().toUtf8());
+        hash.addData(QByteArrayView(f->isSuppressed() ? "s" : "a", 1));
+        hashVariant(hash, f->props());
+    }
     return hash.result().toHex();
 }
 
@@ -1611,18 +1780,19 @@ QJsonObject FissionDocument::resultCacheJson() const {
     QElapsedTimer clock;
     clock.start();
     for (auto *b : m_bodies) {
-        QString brep;
+        // Binary BRep (BinTools), lightly compressed: the text format took most of a big design's save and
+        // open, above all for mesh bodies (every triangle written as text)
+        QString bin;
         if (b && !b->shape().IsNull()) {
-            std::ostringstream os;
-            BRepTools::Write(b->shape(), os);
-            const std::string text = os.str();
-            const QByteArray raw(text.data(), int(text.size()));
-            brep = QString::fromLatin1(qCompress(raw, 6).toBase64());
+            std::ostringstream os(std::ios::out | std::ios::binary);
+            BinTools::Write(b->shape(), os, Standard_False, Standard_False, BinTools_FormatVersion_CURRENT);
+            const std::string data = os.str();
+            bin = QString::fromLatin1(qCompress(QByteArray(data.data(), qsizetype(data.size())), 1).toBase64());
         }
         bodies.append(QJsonObject{{QStringLiteral("name"), b->name()},
                                   {QStringLiteral("sourceFeature"), b->sourceFeature()},
                                   {QStringLiteral("editedBy"), b->editedBy()},
-                                  {QStringLiteral("brep"), brep}});
+                                  {QStringLiteral("bin"), bin}});
         if (clock.elapsed() > 40) {
             FissionProgress::report(QStringLiteral("save"), 0.2, QStringLiteral("Storing solids…"));
             if (QCoreApplication::instance())
@@ -1649,14 +1819,22 @@ bool FissionDocument::restoreResultCache(const QJsonObject &cache) {
         state.name = entry.value(QStringLiteral("name")).toString();
         state.sourceFeature = entry.value(QStringLiteral("sourceFeature")).toString();
         state.editedBy = entry.value(QStringLiteral("editedBy")).toString();
-        const QByteArray packed = QByteArray::fromBase64(entry.value(QStringLiteral("brep")).toString().toLatin1());
+        // "bin": binary BRep (1.13.40 on); "brep": the text format of older files
+        const bool binary = entry.contains(QStringLiteral("bin"));
+        const QByteArray packed = QByteArray::fromBase64(
+            entry.value(binary ? QStringLiteral("bin") : QStringLiteral("brep")).toString().toLatin1());
         if (!packed.isEmpty()) {
             const QByteArray raw = qUncompress(packed);
             if (raw.isEmpty()) return false;
-            std::istringstream is(std::string(raw.constData(), size_t(raw.size())));
-            BRep_Builder builder;
+            std::istringstream is(std::string(raw.constData(), size_t(raw.size())),
+                                  binary ? std::ios::in | std::ios::binary : std::ios::in);
             try {
-                BRepTools::Read(state.shape, is, builder);
+                if (binary) {
+                    BinTools::Read(state.shape, is);
+                } else {
+                    BRep_Builder builder;
+                    BRepTools::Read(state.shape, is, builder);
+                }
             } catch (const Standard_Failure &) {
                 return false;
             }
@@ -1827,9 +2005,11 @@ bool FissionDocument::save(const QString &path) {
     pump();
 
     // Fold any legacy "<file>.f360.versions/" sidecar into memory before writing the single-file history
+    ensureHistory();
     DocumentVersionStore::migrateSidecarInto(path, m_history, DocumentVersionStore::instance()->maxVersions());
 
-    const QByteArray designSnap = snapshotJsonForHistory();
+    QJsonObject root = toJson();   // the file and the version snapshot share this one serialization
+    const QByteArray designSnap = versionSnapshotJson(root);
     QJsonObject entry = DocumentVersionStore::makeHistoryEntry(
         m_versionNumber, designSnap, QStringLiteral("v%1").arg(m_versionNumber));
     // Replace same version number if re-saving, else append
@@ -1844,8 +2024,19 @@ bool FissionDocument::save(const QString &path) {
     if (!replaced) m_history.append(entry);
     while (m_history.size() > DocumentVersionStore::instance()->maxVersions())
         m_history.removeAt(0);
+    // Older versions are kept while their stored size fits the budget (the newest always stays). Versions
+    // saved before 1.13.40 carried a full copy of every Fusion step BRep and mesh, and drop off here.
+    {
+        qsizetype total = 0;
+        qsizetype keepFrom = m_history.size() - 1;
+        for (qsizetype i = m_history.size() - 1; i >= 0; --i) {
+            total += m_history.at(i).toObject().value(QStringLiteral("payload")).toString().size();
+            if (i < m_history.size() - 1 && total > kHistoryBudget) break;
+            keepFrom = i;
+        }
+        while (keepFrom-- > 0) m_history.removeAt(0);
+    }
 
-    QJsonObject root = toJson();
     // Undo and version snapshots use toJson() and stay free of this blob. The file itself keeps it.
     root.insert(QStringLiteral("resultCache"), resultCacheJson());
     root.insert(QStringLiteral("history"), m_history);
@@ -1913,6 +2104,12 @@ static double fusionPt(const QJsonArray &a, int i) {
     return i < a.size() ? a.at(i).toDouble() : 0.0;
 }
 
+// Fusion's API reports every length in centimetres (and angles in radians) whatever the design's own units.
+// The kernel works in mm, so a Fusion length is read as cm. This is the same length, not a rescale: the design
+// still opens in the Fusion document's units (document.units).
+constexpr double kFusionCm = 10.0;
+constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+
 // Map a Fusion sketch (curves in sketch space) to a healthy Fission Sketch feature.
 static QJsonObject fusionSketchToFeature(const QJsonObject &fs) {
     QJsonObject feat;
@@ -1940,10 +2137,26 @@ static QJsonObject fusionSketchToFeature(const QJsonObject &fs) {
     }
 
     QJsonObject props;
-    // Offset sketches: put geometry on the matching origin plane; large offsets stay on XY
-    // (construction-plane chaining is a later upgrade). Curves are still useful for editing.
-    props["plane"] = plane;
-    Q_UNUSED(offsetMm);
+    const QJsonObject frame = fs["frame"].toObject();
+    auto mm3 = [](const QJsonArray &a) {
+        return QJsonArray{fusionPt(a, 0) * kFusionCm, fusionPt(a, 1) * kFusionCm, fusionPt(a, 2) * kFusionCm};
+    };
+    if (!frame.isEmpty()) {
+        // Exporter 1.10: the sketch's own placement in the model (any plane, face or offset; its X direction)
+        props["plane"] = QJsonObject{{"frame", true}, {"origin", mm3(frame["origin"].toArray())},
+                                     {"x", frame["x"]}, {"y", frame["y"]}};
+    } else if (std::fabs(offsetMm) > 1e-9) {
+        // Older exports: the origin plane it is parallel to, moved out to where the sketch sits
+        // (offsetMm is the world coordinate along that plane's axis, still in Fusion cm)
+        const gp_Ax3 ax = GeomUtils::standardPlane(plane);
+        const gp_Dir x = ax.XDirection(), y = ax.YDirection();
+        const double d = offsetMm * kFusionCm;
+        const gp_Pnt o = plane == "XY" ? gp_Pnt(0, 0, d) : plane == "XZ" ? gp_Pnt(0, d, 0) : gp_Pnt(d, 0, 0);
+        props["plane"] = QJsonObject{{"frame", true}, {"origin", QJsonArray{o.X(), o.Y(), o.Z()}},
+                                     {"x", QJsonArray{x.X(), x.Y(), x.Z()}}, {"y", QJsonArray{y.X(), y.Y(), y.Z()}}};
+    } else {
+        props["plane"] = plane;
+    }
 
     QJsonArray ents;
     for (const QJsonValue &cv : fs["curves"].toArray()) {
@@ -1954,24 +2167,23 @@ static QJsonObject fusionSketchToFeature(const QJsonObject &fs) {
         if (t == "line") {
             const QJsonArray s = c["start"].toArray(), en = c["end"].toArray();
             e["type"] = QStringLiteral("line");
-            e["x1"] = fusionPt(s, 0); e["y1"] = fusionPt(s, 1);
-            e["x2"] = fusionPt(en, 0); e["y2"] = fusionPt(en, 1);
+            e["x1"] = fusionPt(s, 0) * kFusionCm; e["y1"] = fusionPt(s, 1) * kFusionCm;
+            e["x2"] = fusionPt(en, 0) * kFusionCm; e["y2"] = fusionPt(en, 1) * kFusionCm;
             ents.append(e);
         } else if (t == "circle") {
             const QJsonArray ctr = c["center"].toArray();
             e["type"] = QStringLiteral("circle");
-            e["cx"] = fusionPt(ctr, 0); e["cy"] = fusionPt(ctr, 1);
-            e["r"] = c["radius"].toDouble();
+            e["cx"] = fusionPt(ctr, 0) * kFusionCm; e["cy"] = fusionPt(ctr, 1) * kFusionCm;
+            e["r"] = c["radius"].toDouble() * kFusionCm;
             if (e["r"].toDouble() > 1e-9) ents.append(e);
         } else if (t == "arc") {
             const QJsonArray ctr = c["center"].toArray();
             const QJsonArray s = c["start"].toArray(), en = c["end"].toArray();
-            const double cx = fusionPt(ctr, 0), cy = fusionPt(ctr, 1);
-            const double r = c["radius"].toDouble();
+            const double cx = fusionPt(ctr, 0) * kFusionCm, cy = fusionPt(ctr, 1) * kFusionCm;
+            const double r = c["radius"].toDouble() * kFusionCm;
             if (r <= 1e-9) continue;
-            constexpr double rad2deg = 180.0 / 3.14159265358979323846;
-            const double a1 = std::atan2(fusionPt(s, 1) - cy, fusionPt(s, 0) - cx) * rad2deg;
-            const double a2 = std::atan2(fusionPt(en, 1) - cy, fusionPt(en, 0) - cx) * rad2deg;
+            const double a1 = std::atan2(fusionPt(s, 1) * kFusionCm - cy, fusionPt(s, 0) * kFusionCm - cx) * kRadToDeg;
+            const double a2 = std::atan2(fusionPt(en, 1) * kFusionCm - cy, fusionPt(en, 0) * kFusionCm - cx) * kRadToDeg;
             e["type"] = QStringLiteral("arc");
             e["cx"] = cx; e["cy"] = cy; e["r"] = r;
             e["a1"] = a1; e["a2"] = a2;
@@ -1983,7 +2195,7 @@ static QJsonObject fusionSketchToFeature(const QJsonObject &fs) {
         if (p.size() < 2) continue;
         QJsonObject e;
         e["type"] = QStringLiteral("point");
-        e["x"] = fusionPt(p, 0); e["y"] = fusionPt(p, 1);
+        e["x"] = fusionPt(p, 0) * kFusionCm; e["y"] = fusionPt(p, 1) * kFusionCm;
         ents.append(e);
     }
     props["entities"] = ents;
@@ -2043,18 +2255,20 @@ static QJsonObject fusionSolidFeature(const QString &fType, const QJsonObject &s
     QJsonObject props;
     props["fusionPassThrough"] = passThrough;
     props["fusionType"] = src["type"].toString();
+    for (const char *key : {"fusionGroup", "fusionLink"})
+        if (src.contains(key)) props[key] = src[key];
 
     auto takeMm = [&](const char *key, const char *fallbackKey = nullptr) {
         if (src.contains(QLatin1String(key) + QLatin1String("Expr")))
             return src[QLatin1String(key) + QLatin1String("Expr")].toString();
-        if (src.contains(key)) return mmExpr(src[key].toDouble());
-        if (fallbackKey && src.contains(fallbackKey)) return mmExpr(src[fallbackKey].toDouble());
+        if (src.contains(key)) return mmExpr(src[key].toDouble() * kFusionCm);
+        if (fallbackKey && src.contains(fallbackKey)) return mmExpr(src[fallbackKey].toDouble() * kFusionCm);
     return QString();
     };
     auto takeDeg = [&](const char *key) {
         if (src.contains(QLatin1String(key) + QLatin1String("Expr")))
             return src[QLatin1String(key) + QLatin1String("Expr")].toString();
-        if (src.contains(key)) return degExpr(src[key].toDouble());
+        if (src.contains(key)) return degExpr(src[key].toDouble() * kRadToDeg);
         return QString();
     };
 
@@ -2116,8 +2330,27 @@ static QJsonObject fusionSolidFeature(const QString &fType, const QJsonObject &s
     return feat;
 }
 
+// A Fusion design that inserts another cloud design (exporter 1.9 writes "link" on that timeline row). Its
+// export is expected at the same project / folder path under the projects folder as in Fusion, so the path
+// is worked out from where this file sits; a flat export (everything in one folder) is the fallback.
+static QString fusionLinkPath(const QString &hostPath, const QJsonObject &host, const QJsonObject &link) {
+    const QString file = link["name"].toString() + QStringLiteral(".f360");
+    const QDir here = QFileInfo(hostPath).absoluteDir();
+    QString project = here.absolutePath();
+    const int up = host["folders"].toArray().size();
+    for (int i = 0; i < up; ++i) project = QFileInfo(project).absolutePath();
+    const QString linkProject = link["project"].toString();
+    if (!host.isEmpty() && !linkProject.isEmpty() && linkProject != host["project"].toString())
+        project = QFileInfo(project).absolutePath() + QLatin1Char('/') + linkProject;
+    QString path = project;
+    for (const QJsonValue &f : link["folders"].toArray()) path += QLatin1Char('/') + f.toString();
+    path += QLatin1Char('/') + file;
+    if (!QFileInfo::exists(path) && QFileInfo::exists(here.filePath(file))) path = here.filePath(file);
+    return QDir::cleanPath(path);
+}
+
 // Convert a Fusion-exported .f360 into native Fission360 JSON with a full timeline.
-static QJsonObject convertFromFusionExport(const QJsonObject &src) {
+static QJsonObject convertFromFusionExport(const QJsonObject &src, const QString &filePath) {
     QJsonObject dst;
     dst["format"] = QStringLiteral("Fission360");
     dst["version"] = 1;
@@ -2136,7 +2369,12 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
     for (auto it = paramsObj.begin(); it != paramsObj.end(); ++it) {
         QJsonObject p = it.value().toObject();
         p["name"] = it.key();
-        p["expression"] = p["expression"].toString(QString::number(p["value"].toDouble()));
+        if (p["expression"].toString().isEmpty()) {
+            const QString u = p["unit"].toString();
+            p["expression"] = u == "deg" || u == "rad" ? degExpr(p["value"].toDouble() * kRadToDeg)
+                            : u.isEmpty() ? QString::number(p["value"].toDouble())
+                                          : mmExpr(p["value"].toDouble() * kFusionCm);
+        }
         if (!p.contains("unit")) p["unit"] = QStringLiteral("mm");
         paramsArr.append(p);
     }
@@ -2217,6 +2455,11 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
                                       {"isSuppressed", entry["isSuppressed"].toBool(false)}};
             }
             if (entry.contains("group")) srcFeat["fusionGroup"] = entry["group"];
+            if (entry.contains("link")) {
+                QJsonObject link = entry["link"].toObject();
+                link["path"] = fusionLinkPath(filePath, src["metadata"].toObject()["fusionFile"].toObject(), link);
+                srcFeat["fusionLink"] = link;
+            }
             const bool hasSnap = entry.contains("stepData") || entry["stepEmpty"].toBool(false);
             QString sketchId = lastSketchId;
             const QString prof = srcFeat["profileSketch"].toString();
@@ -2388,9 +2631,18 @@ bool FissionDocument::load(const QString &path) {
     QByteArray thumbB64;
     try {
         pump(0.08, QStringLiteral("Reading…"));
-        const QByteArray bytes = file.readAll();
+        QByteArray bytes = file.readAll();
         file.close();
         pump(0.28, QStringLiteral("Reading…"));
+        // Version history is kept as text and parsed only when needed: skipping it here made big designs
+        // open several times faster (it was most of the file)
+        m_history = {};
+        m_historyRaw.clear();
+        qsizetype keyFrom = 0, keyTo = 0, valueFrom = 0, valueTo = 0;
+        if (findTopLevelValue(bytes, "history", keyFrom, keyTo, valueFrom, valueTo)) {
+            m_historyRaw = bytes.mid(valueFrom, valueTo - valueFrom);
+            bytes.remove(keyFrom, keyTo - keyFrom);
+        }
         doc = QJsonDocument::fromJson(bytes, &perr);
         if (doc.isNull()) {
             m_lastError = perr.errorString();
@@ -2401,7 +2653,7 @@ bool FissionDocument::load(const QString &path) {
         // Fusion bulk exporter writes document/metadata (often also format:Fission360)
         if (root.contains(QStringLiteral("document")) || root.contains(QStringLiteral("metadata"))) {
             pump(0.48, QStringLiteral("Converting timeline…"));
-            root = convertFromFusionExport(root);
+            root = convertFromFusionExport(root, path);
             doc = QJsonDocument();   // drop the raw export tree before rebuild (frees duplicated stepData)
         } else if (root.value(QStringLiteral("format")).toString() != QStringLiteral("Fission360")) {
             m_lastError = QStringLiteral("Not a Fission 360 document");
@@ -2412,6 +2664,7 @@ bool FissionDocument::load(const QString &path) {
                        : QStringLiteral("Rebuilding…"));
         fromJson(root);
         // Fold legacy sidecar history into the in-memory document (written into the .f360 on next Save)
+        if (QDir(DocumentVersionStore::versionsDirFor(path)).exists()) ensureHistory();
         if (DocumentVersionStore::migrateSidecarInto(path, m_history,
                                                        DocumentVersionStore::instance()->maxVersions()))
             m_modified = true;

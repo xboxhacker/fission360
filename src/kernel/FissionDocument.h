@@ -58,6 +58,8 @@ public:
     void setName(const QString &name);
     QString filePath() const { return m_filePath; }
     bool isModified() const { return m_modified; }
+    // Drawing edits live in this design's file, so they make it unsaved too
+    Q_INVOKABLE void markModified() { setModified(true); }
     QString documentId() const { return m_documentId; }
     qint64 contentRevision() const { return m_contentRevision; }
     int versionNumber() const { return m_versionNumber; }
@@ -336,7 +338,14 @@ private:
     int m_rebuildCount = 0;
     QVariantList m_analyses;
     QVariantMap m_manufacture;
-    QJsonArray m_history;   // embedded version snapshots inside the .f360 file
+    // Embedded version snapshots inside the .f360. Open leaves them as raw JSON text (m_historyRaw) and they are
+    // parsed only when needed (Version History, revert, save): on big designs they were most of the file.
+    mutable QJsonArray m_history;
+    mutable QByteArray m_historyRaw;
+    void ensureHistory() const;
+    // A version snapshot: toJson() with large feature data (Fusion step BReps, mesh and import data) replaced
+    // by "$blob:<sha1>" references; revert takes that data back from the open design
+    QByteArray versionSnapshotJson(const QJsonObject &design) const;
     QList<QJsonObject> m_undo, m_redo;
     QString m_lastError;
     bool m_importCADBusy = false;

@@ -11,7 +11,6 @@
 #include <QQuickWindow>
 #include <QSurfaceFormat>
 #include <QTimer>
-#include <QtWebEngineQuick>
 #include <algorithm>
 #include <cstdio>
 #include <OSD.hxx>
@@ -103,7 +102,10 @@ int main(int argc, char *argv[]) {
     // Access violations and FP faults inside OCCT become Standard_Failure exceptions (needs /EHa) so a bad
     // imported shape fails one feature instead of closing the app
     OSD::SetSignal(false);
-    QtWebEngineQuick::initialize();
+    // WebEngine (Chromium, ~150 MB) is only for the McMaster-Carr browser. The exe does not link it: its QML
+    // plugin loads it the first time that dialog opens. All it needs from startup is shared GL contexts
+    // (plus the OpenGL graphics API set above) before the application object exists.
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QGuiApplication app(argc, argv);
     app.setApplicationName("Fission 360");
     app.setApplicationVersion(FISSION_VERSION);
@@ -121,10 +123,11 @@ int main(int argc, char *argv[]) {
     QCommandLineOption uiTestOption("uitest", "Run the scripted UI walkthrough, saving screenshots to <dir>.", "dir");
     QCommandLineOption meshBench("meshbench", "Time Insert Mesh and Convert Mesh on an STL / OBJ file and exit.", "file");
     QCommandLineOption stepBench("stepbench", "Import a STEP / IGES file, extrude every face and exit.", "file");
+    QCommandLineOption toolBench("toolbench", "Run every solid tool on an imported STEP / IGES / .f360 and exit.", "file");
     QCommandLineOption uiPerf("uiperf", "Time inserting, picking and converting an STL / OBJ file in the real window.", "file");
     QCommandLineOption registerType("register", "Register the .f360 file type, icon and Explorer thumbnails for this user and exit.");
     QCommandLineOption unregisterType("unregister", "Remove the .f360 file type registration for this user and exit.");
-    parser.addOptions({selfTest, demo, open, screenshot, delay, uiTestOption, meshBench, stepBench, uiPerf, registerType,
+    parser.addOptions({selfTest, demo, open, screenshot, delay, uiTestOption, meshBench, stepBench, toolBench, uiPerf, registerType,
                        unregisterType});
     parser.addPositionalArgument("design", "A .f360 design to open (what Explorer passes on double-click).", "[design.f360]");
     parser.process(app);
@@ -132,6 +135,7 @@ int main(int argc, char *argv[]) {
     if (parser.isSet(selfTest)) return SelfTest::run() == 0 ? 0 : 1;
     if (parser.isSet(meshBench)) return SelfTest::meshBench(parser.value(meshBench));
     if (parser.isSet(stepBench)) return SelfTest::stepBench(parser.value(stepBench));
+    if (parser.isSet(toolBench)) return SelfTest::toolBench(parser.value(toolBench));
     if (parser.isSet(registerType) || parser.isSet(unregisterType)) {
         const bool ok = parser.isSet(registerType) ? ShellIntegration::registerFileType(true) : ShellIntegration::unregisterFileType();
         std::printf("%s\n%s\n", ok ? "done" : "FAILED", qPrintable(ShellIntegration::status()));

@@ -42,6 +42,9 @@ public:
     Q_INVOKABLE bool remove(const QString &path);
     Q_INVOKABLE bool exportDesign(const QString &path, const QString &destPathOrUrl);
     Q_INVOKABLE void reveal(const QString &path) const;
+    // OS drag of a design file (a file:// URL, so the viewport and Explorer both accept it), with its
+    // preview under the cursor. Blocks until the drop; returns true when something accepted it.
+    Q_INVOKABLE bool startDrag(const QString &path);
     Q_INVOKABLE QString lastError() const { return m_error; }
 
 signals:

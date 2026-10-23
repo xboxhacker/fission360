@@ -54,6 +54,7 @@ public:
         std::fflush(stdout);
     }
     Q_INVOKABLE void quit() { QCoreApplication::exit(0); }
+    Q_INVOKABLE QString env(const QString &name) const { return qEnvironmentVariable(name.toUtf8().constData()); }
 
     Q_INVOKABLE bool grab(const QString &name) {
         const QString path = QDir(m_dir).filePath(name + ".png");

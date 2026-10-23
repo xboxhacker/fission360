@@ -35,9 +35,11 @@ Item {
             const c = getContext("2d")
             c.reset()
             const s = Math.min(width, height) / 24
-            c.translate((width - 24 * s) / 2, (height - 24 * s) / 2)
+            // Whole-number grid points land on pixel centres (+0.5 px), so a stroke covers one pixel column
+            // instead of smearing across two; 1.25 keeps a solid core with a light edge.
+            c.translate(Math.round((width - 24 * s) / 2) + 0.5, Math.round((height - 24 * s) / 2) + 0.5)
             c.scale(s, s)
-            c.lineWidth = 1.6
+            c.lineWidth = 1.25
             c.lineJoin = "round"
             c.lineCap = "round"
             c.strokeStyle = glyph.color
@@ -663,12 +665,46 @@ Item {
             poly(c, [[15, 3], [22, 10]], false, false); poly(c, [[22, 3], [15, 10]], false, false)
             break
         case "deleteface":
-            // a box whose top face is gone (dashed red) and a minus; not Insert STEP or Remove
-            poly(c, [[3, 11], [14, 11], [14, 21], [3, 21]], true, true)
-            poly(c, [[14, 11], [19, 6], [19, 16], [14, 21]], true, true)
-            c.strokeStyle = "#d9534f"
-            c.setLineDash([2, 2]); poly(c, [[3, 11], [8, 6], [19, 6], [14, 11]], true, false); c.setLineDash([])
-            poly(c, [[16, 2.5], [22, 2.5]], false, false)
+            // a box whose top face is crossed out in red; Remove has its X beside a whole box instead
+            poly(c, [[3, 12], [14, 12], [14, 21], [3, 21]], true, true)
+            poly(c, [[14, 12], [21, 5], [21, 14], [14, 21]], true, true)
+            c.fillStyle = Qt.rgba(0.85, 0.33, 0.31, 0.22)
+            c.beginPath(); c.moveTo(3, 12); c.lineTo(10, 5); c.lineTo(21, 5); c.lineTo(14, 12); c.closePath(); c.fill()
+            c.fillStyle = glyph.fill
+            c.strokeStyle = "#d9534f"; c.lineWidth = 1.6
+            poly(c, [[9, 6], [15, 11]], false, false); poly(c, [[15, 6], [9, 11]], false, false)
+            break
+        // ---- drawing dimensions: extension lines, a dimension line with arrows, a value
+        case "dimension":
+        case "dimlinear":
+            poly(c, [[4, 20], [4, 6]], false, false); poly(c, [[20, 20], [20, 6]], false, false)
+            poly(c, [[4, 10], [20, 10]], false, false)
+            poly(c, [[7, 8], [4, 10], [7, 12]], false, false); poly(c, [[17, 8], [20, 10], [17, 12]], false, false)
+            if (n === "dimension") { c.lineWidth = 1; poly(c, [[9, 16], [15, 16]], false, false); poly(c, [[9, 19], [13, 19]], false, false) }
+            else poly(c, [[2, 20], [22, 20]], false, false)
+            break
+        case "dimaligned":
+            // a slanted edge, its extension lines, and the dimension line parallel to it
+            poly(c, [[8, 22], [22, 8]], false, false)
+            poly(c, [[8, 22], [3, 17]], false, false); poly(c, [[22, 8], [17, 3]], false, false)
+            poly(c, [[4.5, 18.5], [18.5, 4.5]], false, false)
+            poly(c, [[7.3, 17.9], [4.5, 18.5], [5.1, 15.7]], false, false)
+            poly(c, [[15.7, 5.1], [18.5, 4.5], [17.9, 7.3]], false, false)
+            break
+        case "dimangular":
+            poly(c, [[3, 20], [21, 20]], false, false); poly(c, [[3, 20], [17, 4]], false, false)
+            c.beginPath(); c.arc(3, 20, 12, -Math.PI * 0.27, 0); c.stroke()
+            poly(c, [[12.5, 10], [10.7, 11.9], [13.4, 12.6]], false, false)
+            break
+        case "dimradius":
+            circle(c, 12, 12, 9, true)
+            dot(c, 12, 12, 1.4)
+            poly(c, [[12, 12], [18.4, 5.6]], false, false); poly(c, [[15.4, 5.8], [18.4, 5.6], [18.2, 8.6]], false, false)
+            break
+        case "dimdiameter":
+            circle(c, 12, 12, 9, true)
+            poly(c, [[5.6, 18.4], [18.4, 5.6]], false, false)
+            poly(c, [[15.4, 5.8], [18.4, 5.6], [18.2, 8.6]], false, false); poly(c, [[8.6, 18.2], [5.6, 18.4], [5.8, 15.4]], false, false)
             break
         // ---- Fusion-only timeline steps (no Fission tool; imported as pass-through snapshots)
         case "component":

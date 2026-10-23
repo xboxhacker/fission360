@@ -34,6 +34,7 @@ class DrawingView : public QObject {
     Q_PROPERTY(QVariantList visibleCurves READ visibleCurves NOTIFY curvesChanged)
     Q_PROPERTY(QVariantList hiddenCurves READ hiddenCurves NOTIFY curvesChanged)
     Q_PROPERTY(QVariantList sectionCurves READ sectionCurves NOTIFY curvesChanged)
+    Q_PROPERTY(QVariantList edges READ edges NOTIFY curvesChanged)
     Q_PROPERTY(bool projected READ projected NOTIFY curvesChanged)
 
 public:
@@ -84,10 +85,18 @@ public:
     QVariantList visibleCurves() const { return m_visible; }
     QVariantList hiddenCurves() const { return m_hidden; }
     QVariantList sectionCurves() const { return m_section; }
+    // Projected model edges (DrawingProjector::Result::edges), in view mm about the view centre
+    QVariantList edges() const { return m_edges; }
+    // The edge under a sheet point (sheet mm, y down), within tolMm on the sheet, as sheet geometry:
+    // {kind "line" | "circle" | "point", edge, viewId, x1,y1,x2,y2 | cx,cy,r,full | x,y}. An end point
+    // or a circle centre within tolMm wins over the edge itself. Empty when nothing is near.
+    Q_INVOKABLE QVariantMap pickEdge(double sheetX, double sheetY, double tolMm) const;
+    // Sheet point of a view-local point
+    QPointF toSheet(double x, double y) const;
     bool projected() const { return m_projected; }
 
     void setCurves(const QVariantList &visible, const QVariantList &hidden, const QVariantList &section,
-                   double widthMm, double heightMm);
+                   double widthMm, double heightMm, const QVariantList &edges = {});
 
     QJsonObject toJson() const;
     static DrawingView *fromJson(const QJsonObject &obj, QObject *parent = nullptr);
@@ -128,5 +137,6 @@ private:
     QVariantList m_visible;
     QVariantList m_hidden;
     QVariantList m_section;
+    QVariantList m_edges;
     bool m_projected = false;
 };

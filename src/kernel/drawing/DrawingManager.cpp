@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "DrawingManager.h"
+#include "DrawingDimension.h"
 #include "DrawingProjector.h"
 #include "kernel/FissionBody.h"
 #include "kernel/FissionDocument.h"
@@ -18,7 +19,10 @@
 #include <QPdfWriter>
 #include <QUrl>
 #include <QUuid>
+#include <QPolygonF>
+#include <QtMath>
 #include <algorithm>
+#include <cmath>
 
 DrawingManager::DrawingManager(QObject *parent)
     : QObject(parent)
@@ -198,7 +202,17 @@ bool DrawingManager::projectView(DrawingView *view, FissionDocument *design, Dra
         m_lastError = result.error.isEmpty() ? QStringLiteral("Projection failed") : result.error;
         return false;
     }
-    view->setCurves(result.visible, result.hidden, result.section, result.width, result.height);
+    view->setCurves(result.visible, result.hidden, result.section, result.width, result.height, result.edges);
+    // Dimensions on this view are measured again on the new projection (a design edit changes the edges)
+    if (auto *sheet = qobject_cast<DrawingSheet *>(view->parent())) {
+        for (int i = 0; i < sheet->annotationCount(); ++i) {
+            QVariantMap a = sheet->annotation(i);
+            if (a.value("space").toString() != QLatin1String("view") || a.value("view").toString() != view->id())
+                continue;
+            if (!DrawingDimension::reattach(a, view->edges())) a["detached"] = true;
+            sheet->updateAnnotation(a.value("id").toString(), a);
+        }
+    }
     if (rendered) {
         const QByteArray png = DrawingProjector::renderShadedPng(design, orient, 420);
         view->setRenderPng(QString::fromLatin1(png.toBase64()));
@@ -249,6 +263,63 @@ void DrawingManager::refreshDrawingSync(FissionDocument *design)
 
 namespace {
 
+DrawingView *viewOn(DrawingSheet *sheet, const QString &id) {
+    if (!sheet || id.isEmpty()) return nullptr;
+    for (int i = 0; i < sheet->viewCount(); ++i)
+        if (DrawingView *v = sheet->view(i); v && v->id() == id) return v;
+    return nullptr;
+}
+
+DrawingDimension::ViewFrame frameOf(const DrawingView *v) {
+    return {v->position().x() + v->width() * v->scale() * 0.5, v->position().y() + v->height() * v->scale() * 0.5,
+            v->scale()};
+}
+
+// A dimension in sheet space: one attached to a view is placed by that view's current position and scale
+QVariantMap sheetSpace(DrawingSheet *sheet, const QVariantMap &ann) {
+    if (ann.value("space").toString() != QLatin1String("view")) return ann;
+    const DrawingView *v = viewOn(sheet, ann.value("view").toString());
+    return v ? DrawingDimension::toSheet(ann, frameOf(v)) : ann;
+}
+
+// A dimension from DrawingDimension::geometry, k device units per sheet mm
+void paintDimension(QPainter &p, const QVariantMap &ann, double k)
+{
+    const QVariantMap g = DrawingDimension::geometry(ann);
+    p.save();
+    p.setPen(QPen(Qt::black, std::max(0.35, 0.18 * k)));
+    p.setBrush(Qt::NoBrush);
+    for (const QVariant &v : g.value("lines").toList()) {
+        const QVariantList s = v.toList();
+        p.drawLine(QPointF(s[0].toDouble() * k, s[1].toDouble() * k), QPointF(s[2].toDouble() * k, s[3].toDouble() * k));
+    }
+    for (const QVariant &v : g.value("arcs").toList()) {
+        const QVariantList s = v.toList();
+        const double r = s[2].toDouble() * k;
+        const QRectF box(s[0].toDouble() * k - r, s[1].toDouble() * k - r, 2 * r, 2 * r);
+        // Qt angles are counter-clockwise in 1/16 degree; the sheet's are clockwise (y down)
+        p.drawArc(box, int(-s[3].toDouble() * 16), int(-s[4].toDouble() * 16));
+    }
+    const double len = g.value("arrowSize", 3.0).toDouble() * k;
+    p.setBrush(Qt::black);
+    for (const QVariant &v : g.value("arrows").toList()) {
+        const QVariantList s = v.toList();
+        const QPointF tip(s[0].toDouble() * k, s[1].toDouble() * k), dir(s[2].toDouble(), s[3].toDouble());
+        const QPointF back = tip - dir * len, side(-dir.y() * len * 0.3, dir.x() * len * 0.3);
+        p.drawPolygon(QPolygonF{tip, back + side, back - side});
+    }
+    const QVariantMap t = g.value("text").toMap();
+    QFont f = p.font();
+    f.setPixelSize(std::max(4, int(t.value("size").toDouble() * k)));
+    p.setFont(f);
+    p.translate(t.value("x").toDouble() * k, t.value("y").toDouble() * k);
+    p.rotate(t.value("angle").toDouble());
+    const QString str = t.value("str").toString();
+    const QRectF box = p.fontMetrics().boundingRect(str);
+    p.drawText(QPointF(-box.width() / 2, box.height() / 3), str);
+    p.restore();
+}
+
 void paintSheet(QPainter &p, DrawingSheet *sheet, double scalePxPerMm)
 {
     if (!sheet) return;
@@ -296,9 +367,13 @@ void paintSheet(QPainter &p, DrawingSheet *sheet, double scalePxPerMm)
             p.setPen(Qt::black);
             QFont f = p.font();
             f.setPointSizeF(std::max(6.0, a.value("fontSize", 3.5).toDouble() * scalePxPerMm * 0.75));
+            f.setBold(a.value("bold").toBool());
+            f.setItalic(a.value("italic").toBool());
             p.setFont(f);
             p.drawText(QPointF(x, y), a.value("text").toString());
-        } else if (kind == QLatin1String("dimension") || kind == QLatin1String("leader")) {
+        } else if (kind == QLatin1String("dimension")) {
+            paintDimension(p, sheetSpace(sheet, a), scalePxPerMm);
+        } else if (kind == QLatin1String("leader")) {
             p.setPen(QPen(Qt::black, 0.5));
             const double x2 = a.value("x2", a.value("x").toDouble()).toDouble() * scalePxPerMm;
             const double y2 = a.value("y2", a.value("y").toDouble()).toDouble() * scalePxPerMm;
@@ -354,7 +429,8 @@ void paintSheet(QPainter &p, DrawingSheet *sheet, double scalePxPerMm)
         }
     }
 
-    // Title block
+    // Title block (unless it was deleted from the sheet)
+    if (!sheet->titleBlockVisible()) return;
     const double tw = 70 * scalePxPerMm, th = 28 * scalePxPerMm;
     const double tx = sheet->width() * scalePxPerMm - tw - 4 * scalePxPerMm;
     const double ty = sheet->height() * scalePxPerMm - th - 4 * scalePxPerMm;
@@ -403,41 +479,68 @@ bool DrawingManager::exportDxf(DrawingSheet *sheet, const QString &path)
     if (!dxf.open(path, {{"VISIBLE", 7}, {"HIDDEN", 8}, {"SECTION", 1}, {"ANNO", 3}, {"TITLE", 4}}, &m_lastError))
         return false;
 
+    // The sheet is in mm from the top left with y down; DXF has y up, so Y = sheet height - y everywhere.
+    // (Views and notes used to be written with different conventions and did not line up.)
+    const double H = sheet->height();
     for (int i = 0; i < sheet->viewCount(); ++i) {
         DrawingView *view = sheet->view(i);
         if (!view) continue;
-        const double ox = view->position().x() + view->width() * view->scale() * 0.5;
-        const double oy = view->position().y() + view->height() * view->scale() * 0.5;
-        const double s = view->scale();
         auto emitSegs = [&](const QVariantList &segs, const QString &layer) {
             for (const QVariant &v : segs) {
                 const QVariantMap m = v.toMap();
-                dxf.addLine2d(ox + m.value("x1").toDouble() * s, oy + m.value("y1").toDouble() * s,
-                              ox + m.value("x2").toDouble() * s, oy + m.value("y2").toDouble() * s, layer);
+                const QPointF a = view->toSheet(m.value("x1").toDouble(), m.value("y1").toDouble());
+                const QPointF b = view->toSheet(m.value("x2").toDouble(), m.value("y2").toDouble());
+                dxf.addLine2d(a.x(), H - a.y(), b.x(), H - b.y(), layer);
             }
         };
         emitSegs(view->visibleCurves(), QStringLiteral("VISIBLE"));
-        emitSegs(view->hiddenCurves(), QStringLiteral("HIDDEN"));
+        if (view->showHiddenLines()) emitSegs(view->hiddenCurves(), QStringLiteral("HIDDEN"));
         emitSegs(view->sectionCurves(), QStringLiteral("SECTION"));
     }
     for (int i = 0; i < sheet->annotationCount(); ++i) {
         const QVariantMap a = sheet->annotation(i);
         const QString kind = a.value("kind").toString();
         if (kind == QLatin1String("text") || kind == QLatin1String("holeNote")) {
-            dxf.addText2d(a.value("x").toDouble(), a.value("y").toDouble(), a.value("text").toString(),
+            dxf.addText2d(a.value("x").toDouble(), H - a.value("y").toDouble(), a.value("text").toString(),
                           a.value("fontSize", 3.5).toDouble(), QStringLiteral("ANNO"));
-        } else if (kind == QLatin1String("dimension") || kind == QLatin1String("leader")) {
-            dxf.addLine2d(a.value("x").toDouble(), a.value("y").toDouble(),
+        } else if (kind == QLatin1String("dimension")) {
+            const QVariantMap g = DrawingDimension::geometry(sheetSpace(sheet, a));
+            for (const QVariant &v : g.value("lines").toList()) {
+                const QVariantList s = v.toList();
+                dxf.addLine2d(s[0].toDouble(), H - s[1].toDouble(), s[2].toDouble(), H - s[3].toDouble(),
+                              QStringLiteral("ANNO"));
+            }
+            for (const QVariant &v : g.value("arcs").toList()) {   // arcs as short lines (the writer has no ARC)
+                const QVariantList s = v.toList();
+                const double cx = s[0].toDouble(), cy = s[1].toDouble(), r = s[2].toDouble();
+                const double a0 = qDegreesToRadians(s[3].toDouble()), sw = qDegreesToRadians(s[4].toDouble());
+                const int n = std::max(4, int(std::fabs(sw) * 12));
+                for (int k = 0; k < n; ++k) {
+                    const double t0 = a0 + sw * k / n, t1 = a0 + sw * (k + 1) / n;
+                    dxf.addLine2d(cx + r * std::cos(t0), H - (cy + r * std::sin(t0)), cx + r * std::cos(t1),
+                                  H - (cy + r * std::sin(t1)), QStringLiteral("ANNO"));
+                }
+            }
+            const double len = g.value("arrowSize", 3.0).toDouble();
+            for (const QVariant &v : g.value("arrows").toList()) {
+                const QVariantList s = v.toList();
+                const double tx = s[0].toDouble(), ty = s[1].toDouble(), dx = s[2].toDouble(), dy = s[3].toDouble();
+                const double bx = tx - dx * len, by = ty - dy * len, sx = -dy * len * 0.3, sy = dx * len * 0.3;
+                dxf.addLine2d(tx, H - ty, bx + sx, H - (by + sy), QStringLiteral("ANNO"));
+                dxf.addLine2d(tx, H - ty, bx - sx, H - (by - sy), QStringLiteral("ANNO"));
+            }
+            const QVariantMap t = g.value("text").toMap();
+            dxf.addText2d(t.value("x").toDouble(), H - t.value("y").toDouble(), t.value("str").toString(),
+                          t.value("size").toDouble(), QStringLiteral("ANNO"));
+        } else if (kind == QLatin1String("leader")) {
+            dxf.addLine2d(a.value("x").toDouble(), H - a.value("y").toDouble(),
                           a.value("x2", a.value("x").toDouble()).toDouble(),
-                          a.value("y2", a.value("y").toDouble()).toDouble(), QStringLiteral("ANNO"));
-            if (!a.value("text").toString().isEmpty())
-                dxf.addText2d(0.5 * (a.value("x").toDouble() + a.value("x2").toDouble()),
-                              0.5 * (a.value("y").toDouble() + a.value("y2").toDouble()),
-                              a.value("text").toString(), 2.5, QStringLiteral("ANNO"));
+                          H - a.value("y2", a.value("y").toDouble()).toDouble(), QStringLiteral("ANNO"));
         }
     }
-    dxf.addText2d(sheet->width() - 68, 8, sheet->partName().isEmpty() ? sheet->name() : sheet->partName(),
-                  3.5, QStringLiteral("TITLE"));
+    if (sheet->titleBlockVisible())
+        dxf.addText2d(sheet->width() - 68, 8, sheet->partName().isEmpty() ? sheet->name() : sheet->partName(),
+                      3.5, QStringLiteral("TITLE"));
     return dxf.close(&m_lastError);
 }
 
@@ -547,4 +650,83 @@ QString DrawingManager::addImage(DrawingSheet *sheet, const QString &path, const
     const double aspect = img.height() > 0 ? double(img.height()) / double(img.width()) : 1.0;
     return sheet->addAnnotation({{"kind", "image"}, {"path", local}, {"x", pos.x()}, {"y", pos.y()},
                                  {"width", widthMm}, {"height", widthMm * aspect}});
+}
+
+QVariantMap DrawingManager::buildDimension(const QString &tool, const QVariantMap &a, const QVariantMap &b,
+                                           double placeX, double placeY, double viewScale) const
+{
+    return DrawingDimension::build(tool, a, b, placeX, placeY, viewScale);
+}
+
+QVariantMap DrawingManager::dimensionGeometry(DrawingSheet *sheet, const QVariantMap &annotation) const
+{
+    QVariantMap g = DrawingDimension::geometry(sheetSpace(sheet, annotation));
+    g["detached"] = annotation.value("detached").toBool();
+    return g;
+}
+
+QVariantMap DrawingManager::attachDimension(DrawingSheet *sheet, const QVariantMap &annotation,
+                                            const QVariantList &picks) const
+{
+    const DrawingView *v = viewOn(sheet, annotation.value("view").toString());
+    if (!v) return annotation;   // not on a view: stays where it was placed on the paper
+    return DrawingDimension::toView(annotation, picks, frameOf(v));
+}
+
+bool DrawingManager::moveDimension(DrawingSheet *sheet, const QString &id, double x, double y) const
+{
+    if (!sheet) return false;
+    for (int i = 0; i < sheet->annotationCount(); ++i) {
+        const QVariantMap a = sheet->annotation(i);
+        if (a.value("id").toString() != id) continue;
+        double px = x, py = y;
+        if (a.value("space").toString() == QLatin1String("view")) {
+            const DrawingView *v = viewOn(sheet, a.value("view").toString());
+            if (!v) return false;
+            const DrawingDimension::ViewFrame f = frameOf(v);
+            px = (x - f.ox) / f.s;
+            py = -(y - f.oy) / f.s;
+        }
+        return sheet->updateAnnotation(id, {{"px", px}, {"py", py}, {"x", px}, {"y", py}});
+    }
+    return false;
+}
+
+QString DrawingManager::dimensionLabel(const QVariantMap &annotation) const
+{
+    return DrawingDimension::label(annotation);
+}
+
+QString DrawingManager::dimensionAt(DrawingSheet *sheet, double x, double y, double tolMm) const
+{
+    if (!sheet) return {};
+    QString best;
+    double bestD = tolMm;
+    for (int i = 0; i < sheet->annotationCount(); ++i) {
+        const QVariantMap a = sheet->annotation(i);
+        if (a.value("kind").toString() != QLatin1String("dimension")) continue;
+        const double d = DrawingDimension::distanceTo(sheetSpace(sheet, a), x, y);
+        if (d < bestD) { bestD = d; best = a.value("id").toString(); }
+    }
+    return best;
+}
+
+QVariantMap DrawingManager::pickSheetEdge(DrawingSheet *sheet, double x, double y, double tolMm) const
+{
+    if (!sheet) return {};
+    // Points beat edges, then the nearest view whose frame holds the click
+    QVariantMap edge;
+    for (int i = 0; i < sheet->viewCount(); ++i) {
+        DrawingView *view = sheet->view(i);
+        if (!view) continue;
+        const QVariantMap hit = view->pickEdge(x, y, tolMm);
+        if (hit.isEmpty()) continue;
+        if (hit.value("kind").toString() == QLatin1String("point")) {
+            QVariantMap out = hit;
+            out["viewScale"] = view->scale();
+            return out;
+        }
+        if (edge.isEmpty()) { edge = hit; edge["viewScale"] = view->scale(); }
+    }
+    return edge;
 }

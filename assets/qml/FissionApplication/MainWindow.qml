@@ -201,6 +201,31 @@ ApplicationWindow {
         else
             fissionApp.showMessage("Reverted to version " + versionNumber + " — linked drawings may be out of date")
     }
+    // Leaving a drawing (for Design, Render or Manufacture) with unsaved changes asks first. The drawing is
+    // part of the design's .f360, so Save writes both.
+    function leaveDrawingThen(next) {
+        if (inDrawing && doc && doc.modified) {
+            leaveDrawingPrompt.next = next
+            leaveDrawingPrompt.open()
+            return
+        }
+        next()
+    }
+    MessageDialog {
+        id: leaveDrawingPrompt
+        property var next: null
+        title: "Unsaved changes"
+        text: "The drawing and design have changes that are not saved yet."
+        informativeText: "Save them now? Don't Save keeps them in the open design until you close it."
+        buttons: MessageDialog.Save | MessageDialog.Discard | MessageDialog.Cancel
+        onButtonClicked: (button, role) => {
+            const go = next
+            next = null
+            if (button === MessageDialog.Cancel || !go) return
+            if (button === MessageDialog.Save) win.saveOrSaveAs()
+            go()
+        }
+    }
     function leaveDrawing() {
         if (!inDrawing) return
         activeDrawingId = ""
@@ -208,6 +233,7 @@ ApplicationWindow {
     }
     function enterDesignWorkspace() {
         leaveDrawing()
+        showManufacture = false   // the Manufacture panel belongs to its workspace
         workspace = "design"
         if (liveRender) applyLiveRenderLook(false)
         liveRender = false
@@ -548,7 +574,9 @@ ApplicationWindow {
         case "Shell": {
             const faces = selectedOf("face")
             p.faces = faces
+            // A picked body with no faces is hollowed whole; nothing picked waits for a pick
             if (faces.length) p.body = faces[0].body
+            else if (selectedOf("body").length) p.body = selectedOf("body")[0].body
             break
         }
         case "Mirror": case "RectangularPattern": case "CircularPattern": {
@@ -1512,6 +1540,11 @@ ApplicationWindow {
 
     // A sketch tool key: switches tool inside a sketch; outside one it asks for a plane first, like Fusion
     function sketchToolKey(tool) {
+        // On a drawing sheet D is the drawing Dimension tool; the other sketch keys do nothing there
+        if (inDrawing) {
+            if (tool === "dimension" && drawingWorkspace) drawingWorkspace.beginDimensionMode("dimension")
+            return
+        }
         if (activeSketchId) { sketchTool = sketchTool === tool ? "" : tool; return }
         if (commandFeatureId) return
         pendingSketchTool = tool
@@ -1866,6 +1899,7 @@ ApplicationWindow {
     Shortcut {
         sequences: [StandardKey.Delete]
         onActivated: {
+            if (win.inDrawing) { if (win.drawingWorkspace) win.drawingWorkspace.deleteSelection(); return }
             if (win.activeSketchId) {
                 if (!viewportItem.deleteSelectedConstraint()) win.deleteSelectedSketchEntities()
                 return

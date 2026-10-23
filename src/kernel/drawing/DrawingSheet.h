@@ -29,6 +29,7 @@ class DrawingSheet : public QObject {
     Q_PROPERTY(int annotationCount READ annotationCount NOTIFY annotationsChanged)
     Q_PROPERTY(int tableCount READ tableCount NOTIFY tablesChanged)
     Q_PROPERTY(QString titleBlockName READ titleBlockName WRITE setTitleBlockName NOTIFY titleBlockChanged)
+    Q_PROPERTY(bool titleBlockVisible READ titleBlockVisible WRITE setTitleBlockVisible NOTIFY titleBlockChanged)
     Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleBlockChanged)
     Q_PROPERTY(QString drawnBy READ drawnBy WRITE setDrawnBy NOTIFY titleBlockChanged)
     Q_PROPERTY(QString revision READ revision WRITE setRevision NOTIFY titleBlockChanged)
@@ -80,6 +81,8 @@ public:
     Q_INVOKABLE QVariantList tables() const { return m_tables; }
 
     QString titleBlockName() const { return m_titleBlock; }
+    bool titleBlockVisible() const { return m_titleBlockVisible; }
+    void setTitleBlockVisible(bool on) { if (m_titleBlockVisible != on) { m_titleBlockVisible = on; emit titleBlockChanged(); } }
     void setTitleBlockName(const QString &name);
     QString title() const { return m_title; }
     void setTitle(const QString &v);
@@ -115,6 +118,7 @@ private:
     QString m_orientation;
     double m_scale;
     QString m_titleBlock = QStringLiteral("ISO");
+    bool m_titleBlockVisible = true;
     QString m_title;
     QString m_drawnBy;
     QString m_revision = QStringLiteral("A");

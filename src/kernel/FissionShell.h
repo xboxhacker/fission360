@@ -13,7 +13,7 @@ public:
     explicit FissionShell(QObject *parent = nullptr) : FissionFeature(parent) {}
     QString type() const override { return QStringLiteral("Shell"); }
     QVariantMap defaults() const override {
-        return {{"faces", QVariantList()}, {"body", 0}, {"thickness", "2 mm"}, {"direction", "inside"}};
+        return {{"faces", QVariantList()}, {"body", -1}, {"thickness", "2 mm"}, {"direction", "inside"}};
     }
     QStringList expressionKeys() const override { return {"thickness"}; }
 

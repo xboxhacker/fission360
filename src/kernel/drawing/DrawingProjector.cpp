@@ -53,16 +53,39 @@ TopoDS_Shape compoundOf(FissionDocument *design) {
 // HLRBRep_HLRToShape returns 2D edges on the projection plane (BRepLib::Plane, XOY).
 // Their 3D points are already (view X right, view Y up, 0). Dotting those points with the
 // world Ax2 axes collapses front views onto a horizontal line, because front Y is world Z.
-void appendSegment(QVariantList &out, const gp_Pnt &p0, const gp_Pnt &p1) {
+// Each segment carries "e", the index of its projected edge in Result::edges, so a click on the
+// drawing finds the whole line or arc it belongs to (dimensions anchor on edges, like Fusion's ViewCurve).
+void appendSegment(QVariantList &out, const gp_Pnt &p0, const gp_Pnt &p1, int edgeIndex) {
     QVariantMap seg;
     seg["x1"] = p0.X();
     seg["y1"] = p0.Y();
     seg["x2"] = p1.X();
     seg["y2"] = p1.Y();
+    seg["e"] = edgeIndex;
     out.append(seg);
 }
 
-void edgesToSegments(const TopoDS_Shape &s, QVariantList &out) {
+// Lines and circular arcs keep their exact geometry; anything else is a plain "curve"
+QVariantMap edgeGeometry(const BRepAdaptor_Curve &c, double f, double l, bool hidden) {
+    QVariantMap e{{"hidden", hidden}};
+    const gp_Pnt a = c.Value(f), b = c.Value(l);
+    if (c.GetType() == GeomAbs_Line) {
+        e["type"] = QStringLiteral("line");
+        e["x1"] = a.X(); e["y1"] = a.Y(); e["x2"] = b.X(); e["y2"] = b.Y();
+    } else if (c.GetType() == GeomAbs_Circle) {
+        const gp_Circ circ = c.Circle();
+        e["type"] = QStringLiteral("circle");
+        e["cx"] = circ.Location().X(); e["cy"] = circ.Location().Y(); e["r"] = circ.Radius();
+        e["full"] = std::fabs(l - f) > 2 * M_PI - 1e-6;
+        e["x1"] = a.X(); e["y1"] = a.Y(); e["x2"] = b.X(); e["y2"] = b.Y();
+    } else {
+        e["type"] = QStringLiteral("curve");
+        e["x1"] = a.X(); e["y1"] = a.Y(); e["x2"] = b.X(); e["y2"] = b.Y();
+    }
+    return e;
+}
+
+void edgesToSegments(const TopoDS_Shape &s, QVariantList &out, QVariantList &edges, bool hidden) {
     if (s.IsNull()) return;
     for (TopExp_Explorer ex(s, TopAbs_EDGE); ex.More(); ex.Next()) {
         const TopoDS_Edge edge = TopoDS::Edge(ex.Current());
@@ -70,6 +93,8 @@ void edgesToSegments(const TopoDS_Shape &s, QVariantList &out) {
         BRepAdaptor_Curve c(edge);
         const double f = c.FirstParameter(), l = c.LastParameter();
         if (l <= f) continue;
+        const int e = int(edges.size());
+        edges.append(edgeGeometry(c, f, l, hidden));
         // Sagitta in millimetres, not a fraction of the end-to-end chord. A semicircle's
         // chord is its diameter, and 2% of that turns a round edge into a dozen sides.
         constexpr double kDrawDeflection = 0.02;
@@ -78,11 +103,11 @@ void edgesToSegments(const TopoDS_Shape &s, QVariantList &out) {
             Standard_Real a, b;
             Handle(Geom_Curve) gc = BRep_Tool::Curve(edge, a, b);
             if (gc.IsNull()) continue;
-            appendSegment(out, gc->Value(a), gc->Value(b));
+            appendSegment(out, gc->Value(a), gc->Value(b), e);
             continue;
         }
         for (int i = 1; i < discret.NbPoints(); ++i)
-            appendSegment(out, discret.Value(i), discret.Value(i + 1));
+            appendSegment(out, discret.Value(i), discret.Value(i + 1), e);
     }
 }
 
@@ -106,8 +131,8 @@ void boundsOf(const QVariantList &segs, double &w, double &h) {
     h = hiY - loY;
 }
 
-// Shift segments so the bbox centre is at the origin (views place their own frame).
-void centreSegments(QVariantList &segs) {
+// Centre of the segments' bounding box; false when there are none
+bool boxCentre(const QVariantList &segs, double &cx, double &cy) {
     double loX = 1e300, loY = 1e300, hiX = -1e300, hiY = -1e300;
     for (const QVariant &v : segs) {
         const QVariantMap m = v.toMap();
@@ -116,14 +141,20 @@ void centreSegments(QVariantList &segs) {
         loY = std::min({loY, m.value("y1").toDouble(), m.value("y2").toDouble()});
         hiY = std::max({hiY, m.value("y1").toDouble(), m.value("y2").toDouble()});
     }
-    if (loX > hiX) return;
-    const double cx = 0.5 * (loX + hiX), cy = 0.5 * (loY + hiY);
-    for (QVariant &v : segs) {
+    if (loX > hiX) return false;
+    cx = 0.5 * (loX + hiX);
+    cy = 0.5 * (loY + hiY);
+    return true;
+}
+
+// Shift segments or edges by (-cx, -cy) so the view's centre is the origin (views place their own frame)
+void shiftItems(QVariantList &items, double cx, double cy) {
+    for (QVariant &v : items) {
         QVariantMap m = v.toMap();
-        m["x1"] = m.value("x1").toDouble() - cx;
-        m["x2"] = m.value("x2").toDouble() - cx;
-        m["y1"] = m.value("y1").toDouble() - cy;
-        m["y2"] = m.value("y2").toDouble() - cy;
+        for (const char *k : {"x1", "x2", "cx"})
+            if (m.contains(k)) m[k] = m.value(k).toDouble() - cx;
+        for (const char *k : {"y1", "y2", "cy"})
+            if (m.contains(k)) m[k] = m.value(k).toDouble() - cy;
         v = m;
     }
 }
@@ -178,20 +209,25 @@ Result projectShape(const TopoDS_Shape &shape, const QString &orientation, bool 
         algo->Update();
         algo->Hide();
         HLRBRep_HLRToShape toShape(algo);
-        edgesToSegments(toShape.VCompound(), r.visible);
-        edgesToSegments(toShape.Rg1LineVCompound(), r.visible);
-        edgesToSegments(toShape.OutLineVCompound(), r.visible);
+        edgesToSegments(toShape.VCompound(), r.visible, r.edges, false);
+        edgesToSegments(toShape.Rg1LineVCompound(), r.visible, r.edges, false);
+        edgesToSegments(toShape.OutLineVCompound(), r.visible, r.edges, false);
         if (showHidden) {
-            edgesToSegments(toShape.HCompound(), r.hidden);
-            edgesToSegments(toShape.Rg1LineHCompound(), r.hidden);
-            edgesToSegments(toShape.OutLineHCompound(), r.hidden);
+            edgesToSegments(toShape.HCompound(), r.hidden, r.edges, true);
+            edgesToSegments(toShape.Rg1LineHCompound(), r.hidden, r.edges, true);
+            edgesToSegments(toShape.OutLineHCompound(), r.hidden, r.edges, true);
         }
     } catch (const Standard_Failure &e) {
         r.error = QString("Projection failed: %1").arg(e.GetMessageString());
         return r;
     }
-    centreSegments(r.visible);
-    centreSegments(r.hidden);
+    // One shift for everything, so hidden lines stay registered with the outline
+    double cx = 0, cy = 0;
+    if (boxCentre(r.visible, cx, cy) || boxCentre(r.hidden, cx, cy)) {
+        shiftItems(r.visible, cx, cy);
+        shiftItems(r.hidden, cx, cy);
+        shiftItems(r.edges, cx, cy);
+    }
     boundsOf(r.visible, r.width, r.height);
     if (r.width <= 0 && !r.hidden.isEmpty()) boundsOf(r.hidden, r.width, r.height);
     r.ok = !r.visible.isEmpty() || !r.hidden.isEmpty();

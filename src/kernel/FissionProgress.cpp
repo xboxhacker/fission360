@@ -2,7 +2,11 @@
 // Copyright (C) FissionCAD contributors
 #include "FissionProgress.h"
 
+#include <QElapsedTimer>
+#include <QHash>
 #include <QMutex>
+#include <QSet>
+#include <cstdio>
 #include <QMutexLocker>
 #include <algorithm>
 
@@ -11,12 +15,29 @@ namespace FissionProgress {
 namespace {
 QMutex g_mutex;
 Sink g_sink;
+QSet<QString> g_started;   // tasks between begin and end (for FISSION_TRACE_IO)
+
+// FISSION_TRACE_IO=1 prints every stage of a task with the time since it began (open / save profiling)
+void trace(const QString &id, const QString &label, bool begin, bool done) {
+    static const bool on = qEnvironmentVariableIsSet("FISSION_TRACE_IO");
+    if (!on) return;
+    static QHash<QString, QElapsedTimer> clocks;
+    static QHash<QString, qint64> last;
+    if (begin) { clocks[id].start(); last[id] = 0; }
+    const qint64 now = clocks.value(id).isValid() ? clocks[id].elapsed() : 0;
+    std::fprintf(stderr, "[io] %-6s %7lld ms (+%6lld)  %s\n", qPrintable(id), now, now - last.value(id),
+                 done ? "done" : qPrintable(label));
+    std::fflush(stderr);
+    last[id] = now;
+}
 
 void emitTo(const QString &id, const QString &label, double fraction, bool done) {
     Sink sink;
     {
         QMutexLocker lock(&g_mutex);
         sink = g_sink;
+        trace(id, label, !done && !g_started.contains(id), done);
+        if (done) g_started.remove(id); else g_started.insert(id);
     }
     if (sink) sink(id, label, fraction, done);
 }

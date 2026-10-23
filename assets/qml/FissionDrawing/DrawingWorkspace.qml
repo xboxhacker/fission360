@@ -57,9 +57,18 @@ Item {
     property bool dragView: false
     property real dragOffX: 0
     property real dragOffY: 0
-    property real dimStartX: 0
-    property real dimStartY: 0
-    property bool dimDragging: false
+    // Dimension tool: dimension (the picks decide), linear, aligned, angular, radius, diameter. Picks are
+    // drawingManager.pickSheetEdge results (a line, circle or point of a view); the next click places it.
+    property string dimTool: "dimension"
+    property var dimPicks: []
+    property var dimHover: ({})
+    property var dimPreview: null
+    // Bumped on every annotation change: an edit keeps annotationCount, so delegates re-read through this
+    property int annRev: 0
+    Connections {
+        target: ws.activeSheet
+        function onAnnotationsChanged() { ws.annRev++ }
+    }
     property real sectionStartX: 0
     property real sectionStartY: 0
     property bool sectionDragging: false
@@ -110,7 +119,21 @@ Item {
     // One drawing undo step. Nested calls share the snapshot taken by the outermost edit.
     function edit(fn) {
         if (drawingDoc) drawingDoc.beginEdit()
-        try { fn() } finally { if (drawingDoc) drawingDoc.endEdit() }
+        try { fn() } finally {
+            if (drawingDoc) drawingDoc.endEdit()
+            // The drawing is saved in the design's .f360, so a drawing edit leaves the design unsaved
+            if (app && app.doc) app.doc.markModified()
+        }
+    }
+
+    // The title block is picked like a note ("__title"); the inspector edits its fields or deletes it
+    readonly property bool titleSelected: selectedNoteId === "__title"
+    function toggleTitleBlock() {
+        if (!activeSheet) return
+        const on = !activeSheet.titleBlockVisible
+        edit(() => { activeSheet.titleBlockVisible = on })
+        if (!on && titleSelected) selectedNoteId = ""
+        fissionApp.showMessage(on ? "Title block shown" : "Title block deleted (DRAWING ▸ Title Block brings it back)")
     }
 
     readonly property var scaleSteps: [0.1, 0.2, 0.25, 0.5, 1, 2, 4, 5, 10]
@@ -214,7 +237,9 @@ Item {
     function finishPlace(msg) {
         activeTool = "select"
         placing = false
-        dimDragging = false
+        dimPicks = []
+        dimHover = ({})
+        dimPreview = null
         sectionDragging = false
         detailDragging = false
         fissionApp.showMessage(msg || "Wheel zoom · middle-drag pan · Shift+drag a view to project · F fit")
@@ -258,9 +283,118 @@ Item {
         fissionApp.showMessage("Detail View — click and drag a circle on the parent view")
     }
 
-    function beginDimensionMode() {
+    function beginDimensionMode(tool) {
+        dimTool = tool || "dimension"
+        dimPicks = []
+        dimHover = ({})
+        dimPreview = null
+        selectedView = null
+        selectedNoteId = ""
         activeTool = "dimension"
-        fissionApp.showMessage("Dimension — click two points to measure")
+        fissionApp.showMessage(dimHint())
+    }
+
+    function dimHint() {
+        const names = { dimension: "Dimension", linear: "Linear Dimension", aligned: "Aligned Dimension",
+                        angular: "Angular Dimension", radius: "Radius Dimension", diameter: "Diameter Dimension" }
+        const name = names[dimTool] || "Dimension"
+        if (!dimPicks.length) {
+            if (dimTool === "angular") return name + " — click the first line (Esc finishes)"
+            if (dimTool === "radius" || dimTool === "diameter") return name + " — click an arc or circle (Esc finishes)"
+            return name + " — click a line, circle or corner (Esc finishes)"
+        }
+        if (dimTool === "angular" && dimPicks.length === 1) return name + " — click the second line"
+        if (dimPicks.length === 1 && dimPicks[0].kind === "point") return name + " — click a second corner, line or circle"
+        return name + " — click where the dimension goes" + (dimPicks.length === 1 && dimTool !== "radius"
+                && dimTool !== "diameter" ? ", or a second line, circle or corner" : "")
+    }
+
+    function dimTolerance() { return 6 / Math.max(0.01, sheetCanvas.fitScale * sheetZoom) }
+
+    function samePick(a, b) {
+        return !!a && !!b && a.viewId === b.viewId && a.kind === b.kind
+            && (a.kind === "point" ? Math.hypot(a.x - b.x, a.y - b.y) < 1e-6 : a.edge === b.edge)
+    }
+
+    // A click with the dimension tool: a pick, or (once the picks make a dimension) its place
+    function dimensionClick(p) {
+        if (!activeSheet) return
+        const mgr = fissionApp.drawingManager
+        const hit = mgr.pickSheetEdge(activeSheet, p.x, p.y, dimTolerance())
+        const has = hit && !!hit.kind
+        const picks = dimPicks
+        const oneOnly = dimTool === "radius" || dimTool === "diameter"
+        if (!picks.length) {
+            if (!has) { fissionApp.showMessage("Nothing to measure there — " + dimHint()); return }
+            dimPicks = [hit]
+            dimPreview = null
+            fissionApp.showMessage(dimHint())
+            return
+        }
+        const needSecond = dimTool === "angular" || picks[0].kind === "point"
+        if (picks.length === 1 && has && !oneOnly && !samePick(hit, picks[0]) && hit.viewId !== picks[0].viewId) {
+            fissionApp.showMessage("Both picks must be on the same view")
+            return
+        }
+        if (picks.length === 1 && has && !oneOnly && !samePick(hit, picks[0])) {
+            dimPicks = [picks[0], hit]
+            dimPreview = null
+            fissionApp.showMessage(dimHint())
+            return
+        }
+        if (picks.length === 1 && needSecond) { fissionApp.showMessage(dimHint()); return }
+        const ann = mgr.buildDimension(dimTool, picks[0], picks[1] || ({}), p.x, p.y, picks[0].viewScale || 1)
+        if (ann.error) { fissionApp.showMessage(ann.error); return }
+        // Stored on its view: it moves with the view and is measured again when the design changes
+        const attached = mgr.attachDimension(activeSheet, ann, picks)
+        edit(() => activeSheet.addAnnotation(attached))
+        dimPicks = []
+        dimPreview = null
+        fissionApp.showMessage(mgr.dimensionLabel(ann) + " placed — " + dimHint())
+    }
+
+    function dimensionMove(p) {
+        if (!activeSheet) return
+        const mgr = fissionApp.drawingManager
+        dimHover = mgr.pickSheetEdge(activeSheet, p.x, p.y, dimTolerance())
+        const picks = dimPicks
+        if (!picks.length || ((dimTool === "angular" || picks[0].kind === "point") && picks.length < 2)) {
+            dimPreview = null
+            return
+        }
+        const ann = mgr.buildDimension(dimTool, picks[0], picks[1] || ({}), p.x, p.y, picks[0].viewScale || 1)
+        dimPreview = ann.error ? null : ann
+    }
+
+    // Delete: the selected dimension or note, else the selected view
+    function deleteSelection() {
+        if (!activeSheet || editingNoteId) return
+        if (titleSelected) { toggleTitleBlock(); return }
+        if (selectedNoteId) {
+            const id = selectedNoteId
+            selectedNoteId = ""
+            edit(() => activeSheet.removeAnnotation(id))
+            fissionApp.showMessage("Deleted")
+        } else if (selectedView) {
+            const id = selectedView.id
+            selectedView = null
+            edit(() => activeSheet.removeView(id))
+            fissionApp.showMessage("View deleted")
+        }
+    }
+
+    function annotationById(id) {
+        if (!activeSheet || !id) return null
+        for (let i = 0; i < activeSheet.annotationCount; ++i) {
+            const a = activeSheet.annotation(i)
+            if (a && a.id === id) return a
+        }
+        return null
+    }
+    readonly property var selectedAnn: { annRev; return annotationById(selectedNoteId) }
+    function setAnn(fields) {
+        const id = selectedNoteId
+        if (id && activeSheet) edit(() => activeSheet.updateAnnotation(id, fields))
     }
 
     function beginTextMode() {
@@ -320,18 +454,18 @@ Item {
         const base = views.find(v => v.type === "base")
         if (!base) return
         edit(() => {
-            base.position = Qt.point(30, 30)
-            let i = 0
-            for (const v of views) {
-                if (v === base) continue
-                i++
-                const gap = 10
-                const w = Math.max(20, v.width * v.scale)
-                const h = Math.max(16, v.height * v.scale)
+        base.position = Qt.point(30, 30)
+        let i = 0
+        for (const v of views) {
+            if (v === base) continue
+            i++
+            const gap = 10
+            const w = Math.max(20, v.width * v.scale)
+            const h = Math.max(16, v.height * v.scale)
                 if (i % 2 === 1)
-                    v.position = Qt.point(base.position.x + w + gap, base.position.y + (i / 2) * (h + gap))
+                v.position = Qt.point(base.position.x + w + gap, base.position.y + (i / 2) * (h + gap))
                 else
-                    v.position = Qt.point(base.position.x, base.position.y + h + gap + (i / 2) * (h + gap))
+                v.position = Qt.point(base.position.x, base.position.y + h + gap + (i / 2) * (h + gap))
             }
         })
         fissionApp.showMessage("Tidied up")
@@ -539,13 +673,27 @@ Item {
             // ── TITLE BLOCK ───────────────────────────────────────────────
             Rectangle {
                 id: titleBlock
+                visible: !ws.activeSheet || ws.activeSheet.titleBlockVisible
                 x: parent.width - 180 * sheetCanvas.fitScale
                 y: parent.height - 60 * sheetCanvas.fitScale
+                z: 5
                 width: 180 * sheetCanvas.fitScale
                 height: 60 * sheetCanvas.fitScale
                 color: "white"
-                border.color: "#333"
-                border.width: 1
+                border.color: ws.titleSelected ? "#1a6fd1" : "#333"
+                border.width: ws.titleSelected ? 2 : 1
+
+                // Click to edit its fields in the inspector; Delete removes it
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: ws.activeTool === "select"
+                    onClicked: {
+                        if (ws.editingNoteId) ws.commitNoteEdit()
+                        ws.selectedView = null
+                        ws.selectedNoteId = "__title"
+                        ws.forceActiveFocus()
+                    }
+                }
 
                 Text {
                     anchors.top: parent.top
@@ -611,16 +759,18 @@ Item {
                 delegate: Item {
                     id: annItem
                     required property int index
-                    readonly property var ann: ws.activeSheet ? ws.activeSheet.annotation(index) : ({})
+                    readonly property var ann: { ws.annRev; return ws.activeSheet ? ws.activeSheet.annotation(index) : ({}) }
+                    readonly property bool movable: ann.kind === "text" || ann.kind === "holeNote"
                     x: (ann.x || 0) * sheetCanvas.fitScale
                     y: (ann.y || 0) * sheetCanvas.fitScale
-                    z: 8
-                    width: ann.kind === "text" ? Math.max(12, noteLabel.implicitWidth, noteInput.visible ? Math.max(80, noteInput.implicitWidth) : 0) : 1
-                    height: ann.kind === "text" ? Math.max(14, noteLabel.implicitHeight) : 1
+                    // Above the views, so a note placed on a view can still be picked and dragged
+                    z: 30
+                    width: movable ? Math.max(12, noteLabel.implicitWidth, noteInput.visible ? Math.max(80, noteInput.implicitWidth) : 0) : 1
+                    height: movable ? Math.max(14, noteLabel.implicitHeight) : 1
                     Canvas {
                         width: 240; height: 80
                         anchors.centerIn: parent
-                        visible: ann.kind === "dimension" || ann.kind === "leader"
+                        visible: ann.kind === "leader"   // dimensions are drawn by dimLayer
                         onPaint: {
                             const ctx = getContext("2d")
                             ctx.reset()
@@ -644,10 +794,11 @@ Item {
                     }
                     Text {
                         id: noteLabel
-                        visible: (ann.kind === "holeNote" || ann.kind === "dimension" || ann.kind === "text")
-                                 && ws.editingNoteId !== ann.id
+                        visible: (ann.kind === "holeNote" || ann.kind === "text") && ws.editingNoteId !== ann.id
                         text: ann.text || (ann.kind === "holeNote" ? "Hole" : "")
-                        font.pixelSize: Math.max(9, (ann.fontSize || 3.5) * sheetCanvas.fitScale)
+                        font.pixelSize: Math.max(4, (ann.fontSize || 3.5) * sheetCanvas.fitScale)
+                        font.bold: !!ann.bold
+                        font.italic: !!ann.italic
                         color: ws.selectedNoteId === ann.id && ann.kind === "text" ? "#1a4f9c" : "#222"
                     }
                     TextInput {
@@ -655,6 +806,8 @@ Item {
                         z: 2
                         visible: ann.kind === "text" && ws.editingNoteId === ann.id
                         font.pixelSize: noteLabel.font.pixelSize
+                        font.bold: noteLabel.font.bold
+                        font.italic: noteLabel.font.italic
                         color: "#111"
                         selectByMouse: true
                         width: Math.max(80, implicitWidth + 8)
@@ -667,8 +820,21 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         z: 1
-                        enabled: ann.kind === "text" && ws.editingNoteId !== ann.id
+                        enabled: annItem.movable && ws.editingNoteId !== ann.id && ws.activeTool === "select"
                         acceptedButtons: Qt.LeftButton
+                        cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                        // Drag a note to move it; a click selects it, a double-click edits it on the sheet
+                        drag.target: annItem
+                        drag.threshold: 4
+                        onReleased: {
+                            if (annItem.x === (ann.x || 0) * sheetCanvas.fitScale && annItem.y === (ann.y || 0) * sheetCanvas.fitScale)
+                                return
+                            const id = ann.id
+                            const nx = annItem.x / sheetCanvas.fitScale, ny = annItem.y / sheetCanvas.fitScale
+                            ws.edit(() => ws.activeSheet.updateAnnotation(id, { x: nx, y: ny }))
+                            annItem.x = Qt.binding(() => (annItem.ann.x || 0) * sheetCanvas.fitScale)
+                            annItem.y = Qt.binding(() => (annItem.ann.y || 0) * sheetCanvas.fitScale)
+                        }
                         onClicked: {
                             ws.selectedView = null
                             ws.selectedNoteId = ann.id
@@ -744,8 +910,8 @@ Item {
                 }
             }
 
-            Rectangle {
-                id: ghost
+        Rectangle {
+            id: ghost
                 visible: ws.placing && (ws.activeTool === "baseView" || ws.activeTool === "text"
                          || ws.activeTool === "partsList" || ws.activeTool === "revision"
                          || ws.activeTool === "auxiliaryView")
@@ -754,128 +920,219 @@ Item {
                 width: 90
                 height: 70
                 color: Qt.rgba(0, 102 / 255, 204 / 255, 0.15)
-                border.color: "#0066CC"
-                border.width: 2
+            border.color: "#0066CC"
+            border.width: 2
                 z: 40
-            }
+        }
 
-            Rectangle {
-                id: dimPreview
-                visible: ws.dimDragging
-                x: Math.min(ws.dimStartX, x2)
-                y: Math.min(ws.dimStartY, y2)
-                width: Math.abs(x2 - ws.dimStartX)
-                height: Math.abs(y2 - ws.dimStartY)
-                color: Qt.rgba(204 / 255, 0, 0, 0.1)
-                border.color: "#CC0000"
-                border.width: 1
-                property real x2: 0
-                property real y2: 0
-                z: 40
+        // Every dimension on the sheet, plus (with the dimension tool) the edge under the cursor, the picks and
+        // the dimension that follows the cursor. Geometry comes from DrawingDimension, like PDF and DXF export.
+        Canvas {
+            id: dimLayer
+            anchors.fill: parent
+            z: 25
+            enabled: false
+            // Dimensions on a view follow it, so a view's position and scale are watched too
+            readonly property var viewPlaces: ws.activeSheet
+                ? ws.activeSheet.views.map(v => v.position.x + "," + v.position.y + "," + v.scale + "," + v.width).join(";") : ""
+            readonly property var watch: [ws.annRev, sheetCanvas.fitScale, ws.dimHover, ws.dimPicks, ws.dimPreview,
+                                          ws.selectedNoteId, ws.activeSheet, ws.activeTool, viewPlaces]
+            onWatchChanged: requestPaint()
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onPaint: {
+                const ctx = getContext("2d")
+                ctx.reset()
+                if (!ws.activeSheet) return
+                const k = sheetCanvas.fitScale
+                const mgr = fissionApp.drawingManager
+                function edge(e, color, w) {
+                    ctx.strokeStyle = color
+                    ctx.fillStyle = color
+                    ctx.lineWidth = w
+                    ctx.beginPath()
+                    if (e.kind === "point") {
+                        ctx.arc(e.x * k, e.y * k, 3.5, 0, 2 * Math.PI)
+                        ctx.fill()
+                        return
+                    }
+                    if (e.kind === "circle") ctx.arc(e.cx * k, e.cy * k, e.r * k, 0, 2 * Math.PI)
+                    else { ctx.moveTo(e.x1 * k, e.y1 * k); ctx.lineTo(e.x2 * k, e.y2 * k) }
+                    ctx.stroke()
+                }
+                function dim(a, color) {
+                    const g = mgr.dimensionGeometry(ws.activeSheet, a)
+                    if (g.detached) color = "#c83a32"   // its edge is gone from the view: shown red, not moved
+                    ctx.strokeStyle = color
+                    ctx.fillStyle = color
+                    ctx.lineWidth = 1
+                    ctx.beginPath()
+                    for (const s of g.lines) { ctx.moveTo(s[0] * k, s[1] * k); ctx.lineTo(s[2] * k, s[3] * k) }
+                    ctx.stroke()
+                    for (const s of g.arcs) {
+                        const a0 = s[3] * Math.PI / 180, sw = s[4] * Math.PI / 180
+                        ctx.beginPath()
+                        ctx.arc(s[0] * k, s[1] * k, s[2] * k, a0, a0 + sw, sw < 0)
+                        ctx.stroke()
+                    }
+                    const len = (g.arrowSize || 3) * k
+                    for (const s of g.arrows) {
+                        const tx = s[0] * k, ty = s[1] * k, dx = s[2], dy = s[3]
+                        const bx = tx - dx * len, by = ty - dy * len, sx = -dy * len * 0.3, sy = dx * len * 0.3
+                        ctx.beginPath()
+                        ctx.moveTo(tx, ty); ctx.lineTo(bx + sx, by + sy); ctx.lineTo(bx - sx, by - sy)
+                        ctx.closePath()
+                        ctx.fill()
+                    }
+                    const t = g.text
+                    ctx.save()
+                    ctx.translate(t.x * k, t.y * k)
+                    ctx.rotate(t.angle * Math.PI / 180)
+                    ctx.font = Math.max(6, t.size * k).toFixed(1) + "px sans-serif"
+                    ctx.textAlign = "center"
+                    ctx.textBaseline = "middle"
+                    ctx.fillText(t.str, 0, 0)
+                    ctx.restore()
+                }
+                for (let i = 0; i < ws.activeSheet.annotationCount; ++i) {
+                    const a = ws.activeSheet.annotation(i)
+                    if (a.kind === "dimension") dim(a, a.id === ws.selectedNoteId ? "#1a6fd1" : "#1e1e1e")
+                }
+                if (ws.activeTool !== "dimension") return
+                for (const p of ws.dimPicks) edge(p, "#e07a1f", 2.5)
+                if (ws.dimHover && ws.dimHover.kind) edge(ws.dimHover, "#1a6fd1", 2)
+                if (ws.dimPreview) dim(ws.dimPreview, "#1a6fd1")
             }
+        }
 
-            Rectangle {
-                id: sectionLine
-                visible: ws.sectionDragging
+        // Above the views: a press on a dimension selects it and dragging moves its line / text (one undo
+        // step). Anywhere else the press is passed on to the view or the paper underneath.
+        MouseArea {
+            id: dimMouse
+            anchors.fill: parent
+            z: 26
+            enabled: ws.activeTool === "select"
+            property string dragId: ""
+            property bool moved: false
+            onPressed: (m) => {
+                const p = ws.paperToMm(m.x, m.y)
+                const id = ws.activeSheet ? fissionApp.drawingManager.dimensionAt(ws.activeSheet, p.x, p.y, ws.dimTolerance()) : ""
+                if (!id) { m.accepted = false; return }
+                if (ws.editingNoteId) ws.commitNoteEdit()
+                ws.selectedView = null
+                ws.selectedNoteId = id
+                ws.forceActiveFocus()
+                dragId = id
+                moved = false
+            }
+            onPositionChanged: (m) => {
+                if (!dragId) return
+                const p = ws.paperToMm(m.x, m.y)
+                if (!moved) { if (ws.drawingDoc) ws.drawingDoc.beginEdit(); moved = true }
+                fissionApp.drawingManager.moveDimension(ws.activeSheet, dragId, p.x, p.y)
+            }
+            onReleased: {
+                if (moved) {
+                    if (ws.drawingDoc) ws.drawingDoc.endEdit()
+                    if (ws.app && ws.app.doc) ws.app.doc.markModified()
+                }
+                dragId = ""
+                moved = false
+            }
+        }
+
+        Rectangle {
+            id: sectionLine
+            visible: ws.sectionDragging
                 x: Math.min(ws.sectionStartX, x2)
                 y: Math.min(ws.sectionStartY, y2)
                 width: Math.abs(x2 - ws.sectionStartX) || 2
                 height: Math.abs(y2 - ws.sectionStartY) || 2
                 color: Qt.rgba(204 / 255, 0, 0, 0.3)
-                border.color: "#CC0000"
-                border.width: 2
-                property real x2: 0
-                property real y2: 0
+            border.color: "#CC0000"
+            border.width: 2
+            property real x2: 0
+            property real y2: 0
                 z: 40
-            }
+        }
 
             // Under the views. Left clicks on a view hit the view; empty paper hits this.
-            MouseArea {
+        MouseArea {
                 id: sheetMouse
-                anchors.fill: parent
+            anchors.fill: parent
                 z: 1
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
                 cursorShape: (ws.placing || ws.activeTool === "dimension" || ws.activeTool === "sectionView"
                               || ws.activeTool === "detailView")
-                             ? Qt.CrossCursor : Qt.ArrowCursor
-                onPressed: (m) => {
+                         ? Qt.CrossCursor : Qt.ArrowCursor
+            onPressed: (m) => {
                     ws.forceActiveFocus()
-                    if (ws.activeTool === "dimension") {
-                        ws.dimStartX = m.x; ws.dimStartY = m.y
-                        ws.dimDragging = true
-                        dimPreview.x2 = m.x; dimPreview.y2 = m.y
-                        return
-                    }
-                    if (ws.activeTool === "sectionView") {
+                if (ws.activeTool === "dimension") {
+                    ws.dimensionClick(ws.paperToMm(m.x, m.y))
+                    return
+                }
+                if (ws.activeTool === "sectionView") {
                         ws.sectionStartX = m.x; ws.sectionStartY = m.y
-                        ws.sectionDragging = true
+                    ws.sectionDragging = true
                         sectionLine.x2 = m.x; sectionLine.y2 = m.y
-                        return
-                    }
-                    if (ws.activeTool === "detailView") {
+                    return
+                }
+                if (ws.activeTool === "detailView") {
                         ws.detailStartX = m.x; ws.detailStartY = m.y
-                        ws.detailDragging = true
-                        return
-                    }
+                    ws.detailDragging = true
+                    return
+                }
                     const p = ws.paperToMm(m.x, m.y)
-                    if (ws.activeTool === "baseView") {
+                if (ws.activeTool === "baseView") {
                         ws.placeBaseAt(p.x, p.y)
                     } else if (ws.activeTool === "auxiliaryView" && ws.selectedView) {
                         ws.edit(() => {
                             const view = ws.activeSheet.addView("auxiliary", {
-                                position: Qt.point(p.x, p.y),
+                        position: Qt.point(p.x, p.y),
                                 scale: ws.selectedView.scale,
                                 orientation: "isometric",
                                 parentViewId: ws.selectedView.id,
-                                showHiddenLines: ws.showHidden
-                            })
+                        showHiddenLines: ws.showHidden
+                    })
                             ws.projectOnto(view)
                             ws.selectedView = view
                         })
                         ws.finishPlace("Auxiliary view placed")
-                    } else if (ws.activeTool === "text") {
+                } else if (ws.activeTool === "text") {
                         let id = ""
                         ws.edit(() => {
                             id = ws.activeSheet.addAnnotation({ kind: "text", x: p.x, y: p.y, text: "Note", fontSize: 3.5 })
                         })
                         ws.beginNoteEdit(id)
                         ws.finishPlace("Note placed — type to edit, Enter commits, Esc cancels")
-                    } else if (ws.activeTool === "holeNote") {
+                } else if (ws.activeTool === "holeNote") {
                         ws.edit(() => ws.activeSheet.addAnnotation({ kind: "holeNote", x: p.x, y: p.y, text: "Hole", radius: 5 }))
                         ws.finishPlace("Hole note placed")
-                    } else if (ws.activeTool === "partsList") {
+                } else if (ws.activeTool === "partsList") {
                         ws.edit(() => fissionApp.drawingManager.addPartsList(ws.activeSheet, ws.designDoc(), p))
                         ws.finishPlace("Parts list placed")
-                    } else if (ws.activeTool === "revision") {
+                } else if (ws.activeTool === "revision") {
                         ws.edit(() => fissionApp.drawingManager.addRevisionTable(ws.activeSheet, p))
                         ws.finishPlace("Revision table placed")
-                    } else if (ws.activeTool === "centerMark") {
+                } else if (ws.activeTool === "centerMark") {
                         ws.edit(() => ws.activeSheet.addAnnotation({ kind: "centerMark", x: p.x, y: p.y }))
                         ws.finishPlace("Center mark placed")
-                    } else {
+                } else {
                         if (ws.suppressSheetPress) return
-                        ws.selectedView = null
+                    ws.selectedView = null
                         if (ws.editingNoteId) ws.cancelNoteEdit()
-                        ws.selectedNoteId = ""
-                    }
+                        // A click on a dimension selects it (Delete removes it; the inspector edits it)
+                        ws.selectedNoteId = fissionApp.drawingManager.dimensionAt(ws.activeSheet, p.x, p.y, ws.dimTolerance())
                 }
-                onPositionChanged: (m) => {
+            }
+            onPositionChanged: (m) => {
                     if (ws.placing) { ws.ghostX = m.x; ws.ghostY = m.y }
-                    if (ws.dimDragging) { dimPreview.x2 = m.x; dimPreview.y2 = m.y }
+                    if (ws.activeTool === "dimension") ws.dimensionMove(ws.paperToMm(m.x, m.y))
                     if (ws.sectionDragging) { sectionLine.x2 = m.x; sectionLine.y2 = m.y }
                 }
-                onReleased: (m) => {
-                    if (ws.dimDragging) {
-                        const a = ws.paperToMm(ws.dimStartX, ws.dimStartY)
-                        const b = ws.paperToMm(m.x, m.y)
-                        const len = Math.hypot(b.x - a.x, b.y - a.y)
-                        ws.edit(() => ws.activeSheet.addAnnotation({
-                            kind: "dimension", x: a.x, y: a.y, x2: b.x, y2: b.y,
-                            text: len.toFixed(2) + " mm"
-                        }))
-                        ws.finishPlace("Dimension placed")
-                    } else if (ws.sectionDragging && ws.selectedView) {
+            onReleased: (m) => {
+                if (ws.sectionDragging && ws.selectedView) {
                         const a = ws.paperToMm(ws.sectionStartX, ws.sectionStartY)
                         const b = ws.paperToMm(m.x, m.y)
                         let dir = "right"
@@ -885,9 +1142,9 @@ Item {
                             dir = b.y >= a.y ? "down" : "up"
                         ws.edit(() => {
                             const view = ws.activeSheet.addView("section", {
-                                position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
-                                scale: ws.selectedView.scale,
-                                orientation: ws.selectedView.orientation,
+                        position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
+                        scale: ws.selectedView.scale,
+                        orientation: ws.selectedView.orientation,
                                 parentViewId: ws.selectedView.id,
                                 projectDirection: dir
                             })
@@ -900,10 +1157,10 @@ Item {
                         const b = ws.paperToMm(m.x, m.y)
                         ws.edit(() => {
                             const view = ws.activeSheet.addView("detail", {
-                                position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
-                                scale: ws.selectedView.scale * 2,
-                                orientation: ws.selectedView.orientation,
-                                parentViewId: ws.selectedView.id,
+                        position: Qt.point((a.x + b.x) / 2, (a.y + b.y) / 2),
+                        scale: ws.selectedView.scale * 2,
+                        orientation: ws.selectedView.orientation,
+                        parentViewId: ws.selectedView.id,
                                 detailRadius: Math.max(5, Math.hypot(b.x - a.x, b.y - a.y)),
                                 detailCenter: Qt.point(0, 0)
                             })
@@ -955,8 +1212,8 @@ Item {
     }
 
     // Outside the clipped sheet, so the panel and its dropdown stay on screen.
-    Rectangle {
-        id: inspector
+        Rectangle {
+            id: inspector
         visible: ws.selectedView !== null || ws.selectedNoteId !== ""
         width: 236
         height: inspectorCol.implicitHeight + 20
@@ -964,12 +1221,12 @@ Item {
         y: 8
         color: "#2c3136"
         border.color: "#1b1f23"
-        radius: 6
+            radius: 6
         z: 60
 
         // Eats presses on the panel so closing it cannot reach the sheet.
         MouseArea {
-            anchors.fill: parent
+                anchors.fill: parent
             z: 0
             onPressed: (m) => { m.accepted = true }
         }
@@ -983,16 +1240,17 @@ Item {
             anchors.margins: 10
             spacing: 6
 
-            RowLayout {
+                RowLayout {
                 Layout.fillWidth: true
                 Label {
-                    text: ws.selectedView ? ws.selectedView.type : "Note"
+                    text: ws.selectedView ? ws.selectedView.type : ws.titleSelected ? "Title block"
+                          : ws.selectedAnn && ws.selectedAnn.kind === "dimension" ? "Dimension" : "Note"
                     color: "#f2f4f6"
                     font.bold: true
                     font.pixelSize: 13
                     font.capitalization: Font.Capitalize
                 }
-                Item { Layout.fillWidth: true }
+                    Item { Layout.fillWidth: true }
                 MouseArea {
                     implicitWidth: 22
                     implicitHeight: 22
@@ -1012,21 +1270,54 @@ Item {
                 }
             }
 
+            // Title block: its fields, and Delete (DRAWING ▸ Title Block brings it back)
+            Repeater {
+                model: ws.titleSelected ? [["Title", "partName"], ["Drawn by", "drawnBy"], ["Revision", "revision"],
+                                           ["Material", "material"], ["Date", "date"]] : []
+                delegate: ColumnLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label { text: modelData[0]; color: "#b7bec6"; font.pixelSize: 11 }
+                    TextField {
+                        Layout.fillWidth: true
+                        selectByMouse: true
+                        text: ws.activeSheet ? (ws.activeSheet[modelData[1]] || "") : ""
+                        onEditingFinished: {
+                            const key = modelData[1], value = text
+                            if (!ws.activeSheet || ws.activeSheet[key] === value) return
+                            ws.edit(() => { ws.activeSheet[key] = value })
+                        }
+                    }
+                }
+            }
+            Button {
+                text: "Delete title block"
+                Layout.fillWidth: true
+                implicitHeight: 30
+                visible: ws.titleSelected
+                onClicked: ws.toggleTitleBlock()
+            }
+
             Label {
                 text: "Text"
                 color: "#b7bec6"
                 font.pixelSize: 11
-                visible: !ws.selectedView && ws.selectedNoteId !== ""
+                visible: !ws.selectedView && ws.selectedNoteId !== "" && !ws.titleSelected
             }
             TextField {
                 id: noteField
+                readonly property bool isDim: !!ws.selectedAnn && ws.selectedAnn.kind === "dimension"
                 Layout.fillWidth: true
-                visible: !ws.selectedView && ws.selectedNoteId !== ""
+                visible: !ws.selectedView && ws.selectedNoteId !== "" && !ws.titleSelected
                 selectByMouse: true
-                placeholderText: "Note"
-                onAccepted: {
+                // A dimension shows its measured value until text is typed over it; clear the field to measure again
+                placeholderText: isDim ? fissionApp.drawingManager.dimensionLabel(Object.assign({}, ws.selectedAnn, { text: "" }))
+                                       : "Note"
+                // Enter or leaving the field saves (it used to save on Enter only, so a click away lost the edit)
+                onEditingFinished: {
                     const id = ws.selectedNoteId
-                    if (!id || text === ws.noteTextOf(id)) return
+                    if (!id || !ws.activeSheet || text === ws.noteTextOf(id)) return
                     ws.editingNoteId = ""
                     ws.editingDraft = text
                     ws.edit(() => ws.activeSheet.updateAnnotation(id, { text: text }))
@@ -1034,14 +1325,98 @@ Item {
                 Keys.onEscapePressed: (e) => { ws.cancelNoteEdit(); e.accepted = true }
             }
 
+            // Text height (ISO 3098 sizes, mm on the paper), weight and slant; decimals for a dimension
+            Label { text: "Size · style"; color: "#b7bec6"; font.pixelSize: 11; visible: !ws.selectedView && !!ws.selectedAnn }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !ws.selectedView && !!ws.selectedAnn
+                spacing: 4
+                ComboBox {
+                    id: sizeBox
+                    readonly property var sizes: [1.8, 2.5, 3.5, 5, 7, 10, 14, 20]
+                    Layout.fillWidth: true
+                    implicitHeight: 30
+                    model: sizes.map(s => s + " mm")
+                    currentIndex: {
+                        const f = ws.selectedAnn ? Number(ws.selectedAnn.fontSize || 3.5) : 3.5
+                        let best = 0
+                        for (let i = 0; i < sizes.length; ++i)
+                            if (Math.abs(sizes[i] - f) < Math.abs(sizes[best] - f)) best = i
+                        return best
+                    }
+                    onActivated: (i) => ws.setAnn({ fontSize: sizes[i] })
+                    Component.onCompleted: ws.pinComboPopup(sizeBox)
+                }
+                Button {
+                    text: "B"
+                    font.bold: true
+                    implicitWidth: 30
+                    implicitHeight: 30
+                    checkable: true
+                    visible: !noteField.isDim
+                    checked: !!ws.selectedAnn && !!ws.selectedAnn.bold
+                    onClicked: ws.setAnn({ bold: checked })
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Bold"
+                }
+                Button {
+                    text: "I"
+                    font.italic: true
+                    implicitWidth: 30
+                    implicitHeight: 30
+                    checkable: true
+                    visible: !noteField.isDim
+                    checked: !!ws.selectedAnn && !!ws.selectedAnn.italic
+                    onClicked: ws.setAnn({ italic: checked })
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Italic"
+                }
+                ComboBox {
+                    id: decimalsBox
+                    visible: noteField.isDim
+                    implicitWidth: 64
+                    implicitHeight: 30
+                    model: ["0", "0.0", "0.00", "0.000"]
+                    currentIndex: ws.selectedAnn && ws.selectedAnn.decimals !== undefined ? Number(ws.selectedAnn.decimals) : 2
+                    onActivated: (i) => ws.setAnn({ decimals: i })
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Decimal places"
+                    Component.onCompleted: ws.pinComboPopup(decimalsBox)
+                }
+            }
+            Button {
+                text: "Delete"
+                Layout.fillWidth: true
+                implicitHeight: 30
+                visible: !ws.selectedView && !!ws.selectedAnn
+                onClicked: ws.deleteSelection()
+            }
+
             Label { text: "Orientation"; color: "#b7bec6"; font.pixelSize: 11; visible: !!ws.selectedView }
-            ComboBox {
+                ComboBox {
                 id: orientBox
                 Layout.fillWidth: true
                 implicitHeight: 30
                 visible: !!ws.selectedView
                 model: ws.orientationLabels
                 currentIndex: ws.orientationIndex(ws.selectedView ? ws.selectedView.orientation : "front")
+                // A click on the name only focuses the box; then Up / Down or the wheel step through the
+                // orientations and the view follows each step. The arrows on the right open the list.
+                wheelEnabled: true
+                MouseArea {
+                    anchors { left: parent.left; top: parent.top; bottom: parent.bottom }
+                    width: parent.width - (parent.indicator ? parent.indicator.width + 6 : 32)
+                    cursorShape: Qt.IBeamCursor
+                    onPressed: (m) => { orientBox.forceActiveFocus(); m.accepted = true }
+                }
+                Rectangle {   // focus ring: shows the keys / wheel act on this box
+                    anchors.fill: parent
+                    color: "transparent"
+                    radius: 3
+                    border.color: Theme.accent
+                    border.width: 2
+                    visible: orientBox.activeFocus && !orientBox.popup.visible
+                }
                 onActivated: (i) => {
                     const view = ws.selectedView
                     const id = ws.orientationIds[i]
@@ -1073,7 +1448,7 @@ Item {
             }
 
             Label { text: "Scale"; color: "#b7bec6"; font.pixelSize: 11; visible: !!ws.selectedView }
-            RowLayout {
+                RowLayout {
                 Layout.fillWidth: true
                 visible: !!ws.selectedView
                 spacing: 6
@@ -1096,16 +1471,16 @@ Item {
                     implicitHeight: 30
                     onClicked: ws.stepScale(1)
                 }
-            }
+                }
 
-            CheckBox {
+                CheckBox {
                 id: hiddenBox
                 Layout.fillWidth: true
                 visible: !!ws.selectedView
                 enabled: !ws.selectedView || ws.selectedView.displayStyle !== "rendered"
-                text: "Hidden lines"
+                    text: "Hidden lines"
                 spacing: 8
-                checked: ws.selectedView ? ws.selectedView.showHiddenLines : false
+                    checked: ws.selectedView ? ws.selectedView.showHiddenLines : false
                 indicator: Rectangle {
                     implicitWidth: 16
                     implicitHeight: 16
@@ -1167,11 +1542,14 @@ Item {
     }
 
     onSelectedNoteIdChanged: if (noteField) noteField.text = noteTextOf(selectedNoteId)
+    // An edit from the sheet, undo or another control refreshes the field, unless it is being typed in
+    onSelectedAnnChanged: if (noteField && !noteField.activeFocus) noteField.text = selectedAnn ? (selectedAnn.text || "") : ""
     onSelectedViewChanged: if (selectedView) { if (editingNoteId) commitNoteEdit(); selectedNoteId = "" }
 
     Keys.onPressed: (e) => {
         if (e.key === Qt.Key_Escape) {
             if (editingNoteId) cancelNoteEdit()
+            else if (activeTool === "dimension" && dimPicks.length) { dimPicks = []; dimPreview = null; fissionApp.showMessage(dimHint()) }
             else cancelPlace()
             e.accepted = true
         }

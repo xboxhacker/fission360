@@ -20,7 +20,7 @@ import traceback, json, os, time, tempfile, base64, re, struct
 CMD_ID = 'F360_FissionExporter'
 CMD_NAME = 'Export to Fission360'
 CMD_DESC = 'Export designs to .f360 (STEP BRep + timeline + sketches)'
-EXPORTER_VERSION = '1.8'
+EXPORTER_VERSION = '1.10'
 
 handlers = []
 app = None
@@ -36,9 +36,11 @@ def point3(p):
 
 
 def design_units_name(design):
+    """The design's own length unit, exactly (mm, cm, m, in or ft), so Fission opens it in the same units."""
+    names = {'mm': 'mm', 'millimeter': 'mm', 'cm': 'cm', 'centimeter': 'cm', 'm': 'm', 'meter': 'm',
+             'in': 'in', 'inch': 'in', 'ft': 'ft', 'foot': 'ft'}
     try:
-        u = design.unitsManager.defaultLengthUnits
-        return 'in' if u in ('in', 'inch', 'ft', 'foot') else 'mm'
+        return names.get(str(design.unitsManager.defaultLengthUnits).strip().lower(), 'mm')
     except Exception:
         return 'mm'
 
@@ -179,6 +181,12 @@ def sketch_to_dict(sketch):
         if plane and hasattr(plane, 'geometry') and plane.geometry:
             g = plane.geometry
             s['plane'] = {'origin': point3(g.origin), 'normal': point3(g.normal)}
+    except Exception:
+        pass
+    # Where the sketch sits in the model: its origin and X / Y directions (any plane, face or offset)
+    try:
+        s['frame'] = {'origin': point3(sketch.origin), 'x': point3(sketch.xDirection),
+                      'y': point3(sketch.yDirection)}
     except Exception:
         pass
 
@@ -594,6 +602,10 @@ def export_document_to_f360(doc, out_path, include_step=True, unhide=False, prog
         'document': {
             'name': doc.name,
             'units': design_units_name(design),
+            # Every number this add-in writes comes straight from Fusion's API, which always works in cm and
+            # radians whatever the design's units. Nothing is converted here; Fission reads them as such.
+            'geometryUnits': 'cm',
+            'angleUnits': 'rad',
         },
         'parameters': {},
         'timeline': [],
@@ -640,6 +652,53 @@ def collapse_timeline_groups(groups):
             pass
 
 
+def data_file_info(df):
+    """Where a cloud file lives: project, folders below the project root, name (as the exported .f360 is
+    named) and version. Fission finds a linked design's export by the same path under its projects folder."""
+    if not df:
+        return None
+    info = {'name': sanitize(df.name), 'id': '', 'version': 0, 'project': '', 'folders': []}
+    for key, get in (('id', lambda: df.id), ('version', lambda: int(df.versionNumber)),
+                     ('project', lambda: df.parentProject.name)):
+        try:
+            info[key] = get()
+        except Exception:
+            pass
+    try:
+        folders, f = [], df.parentFolder
+        while f and not f.isRoot:
+            folders.insert(0, sanitize(f.name))
+            f = f.parentFolder
+        info['folders'] = folders
+    except Exception:
+        pass
+    return info
+
+
+def occurrence_link(ent):
+    """A timeline row that inserts another design (a referenced component): which file and version."""
+    try:
+        occ = adsk.fusion.Occurrence.cast(ent)
+        if not occ or not occ.isReferencedComponent:
+            return None
+        ref = occ.documentReference
+        link = data_file_info(ref.dataFile)
+        if not link:
+            return None
+        try:
+            link['referencedVersion'] = int(ref.version)
+            link['isOutOfDate'] = bool(ref.isOutOfDate)
+        except Exception:
+            pass
+        try:
+            link['occurrence'] = occ.fullPathName
+        except Exception:
+            pass
+        return link
+    except Exception:
+        return None
+
+
 def unique_components(design):
     """Root plus each component once. allOccurrences lists every copy of a component."""
     root = design.rootComponent
@@ -657,6 +716,12 @@ def unique_components(design):
 
 def _export_design(doc, design, payload, out_path, include_step, progress_cb, per_step):
     root = design.rootComponent
+    try:
+        me = data_file_info(doc.dataFile)
+        if me:
+            payload['metadata']['fusionFile'] = me
+    except Exception:
+        pass   # never saved to the cloud
     try:
         marker = int(design.timeline.markerPosition)
         payload['timelineMarker'] = marker
@@ -700,6 +765,9 @@ def _export_design(doc, design, payload, out_path, include_step, progress_cb, pe
                         entry['group'] = obj.parentGroup.name
                 except Exception:
                     pass
+                link = occurrence_link(ent) if ent else None
+                if link:
+                    entry['link'] = link
                 payload['timeline'].append(entry)
             except Exception:
                 payload['timeline'].append({'index': i, 'type': 'unknown', 'name': ''})

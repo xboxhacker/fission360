@@ -12,6 +12,8 @@ int run();
 int meshBench(const QString &path);
 // Imports a STEP / IGES file and extrudes every face of every body (--stepbench).
 int stepBench(const QString &path);
+// Every solid tool on every face / edge / body of a STEP, IGES or .f360 (--toolbench), with a summary.
+int toolBench(const QString &path);
 // Fills a document with a sample bracket (used by --demo and screenshots).
 void buildDemo(FissionDocument *doc);
 }

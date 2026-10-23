@@ -20,7 +20,7 @@ Written clean-room: the codebase is hand-built and not derived from another vend
 - **Mesh bodies** — import STL/OBJ, smooth, reduce, plane-cut, convert to B-rep (fitted planes/cylinders/cones/spheres/B-splines).
 - **Inspection** — measure, interference, section cut, and surface analyses (curvature comb, curvature map, draft, iso-curve, zebra) done in the renderer.
 - **Sheet metal** — flange, edge flange, contour flange, hem, tab, bend, flat pattern, unfold/refold, flat-pattern DXF.
-- **2D drawings** — HLR-projected base/projected/section/detail/auxiliary views on a sheet, with PDF/DXF export.
+- **2D drawings** — HLR-projected base/projected/section/detail/auxiliary views on a sheet; dimensions picked on model edges (length, distance, angle, radius, diameter); notes with size, bold and italic; PDF/DXF/PNG/TIFF export.
 - **Rendering** — PBR materials, HDRI/IBL environments, PBR texture maps, CPU Monte-Carlo path tracer.
 - **Import / interop** — STEP, IGES, STL, OBJ. **Import a Fusion 360 design** via the companion [Fission 360 Bulk Exporter](#fusion-import) add-in (runs inside Fusion and writes a `.f360` file Fission opens directly).
 - **Send to slicer** — tessellate **visible** bodies to STL and launch **OrcaSlicer** or **Bambu Studio**. Display Settings ▸ Slicer: auto-detect, force one slicer, **Browse…** or **Search for slicer** (finds custom builds). Hidden bodies are never sent.
@@ -53,6 +53,10 @@ aqt install-qt windows desktop 6.8.2 win64_msvc2022_64
 ```
 
 CMake looks for Qt at `../6.8.2/msvc2022_64` (sibling of the `fission360` folder) or `./6.8.2/msvc2022_64`.
+
+### Python scripting (optional)
+
+With Python 3.11 or newer installed (python.org, 64-bit), CMake finds its development files and builds Python scripts and add-ins in. Fission loads `python3.dll` from the user's own Python when a script runs, so the app still starts without Python. Without Python at build time the Scripts dialog says Python support was not built in.
 
 ### 2. OpenCASCADE 7.6
 
@@ -92,9 +96,13 @@ Until CMake gains portable OCCT discovery, `MACOSX_BUNDLE` / `macdeployqt`, and 
 
 The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). Install it in Fusion 360, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
 
+A Fusion design opens in its own units (mm, cm, m, in or ft); sketches and solids keep their true size. Re-export with add-in 1.10 or later for sketches that sit exactly where they were in Fusion.
+
+Designs that insert other Fusion designs keep that link. Export each Fusion folder into the matching folder under the Fission projects folder (`<project>/<folders>/<design>.f360`), and the inserted design shows up under **Linked Designs** in the browser, where you can open it. Its geometry inside the assembly is still the snapshot Fusion exported.
+
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source and Windows release: **1.13.35** (`Fission360-1.13.35-windows-x64.zip`). Up next: real CAM toolpaths and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.40**. Latest GitHub release: **1.13.35** (`Fission360-1.13.35-windows-x64.zip`), which quits at launch; the fix (1.13.36 and later) is not published yet. Up next: real CAM toolpaths and optional lock/sync.
 
 MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md). SolidCraft issue recipes: [`docs/solidcraft-issue-parity.md`](docs/solidcraft-issue-parity.md).
 

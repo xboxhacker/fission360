@@ -63,6 +63,20 @@ static QString featureIdFromRef(const QString &ref) {
 }
 
 bool RebuildContext::resolvePlane(const QVariant &ref, gp_Ax3 &out, QString &error) const {
+    // An explicit frame {frame: true, origin [x,y,z] mm, x [..], y [..]}: a sketch from a Fusion import, where
+    // Fusion gives each sketch's exact placement (offset planes, faces, its own X direction)
+    if (ref.typeId() == QMetaType::QVariantMap && ref.toMap().value("frame").toBool()) {
+        const QVariantMap m = ref.toMap();
+        auto vec = [&](const char *k) {
+            const QVariantList l = m.value(k).toList();
+            return gp_XYZ(l.value(0).toDouble(), l.value(1).toDouble(), l.value(2).toDouble());
+        };
+        const gp_XYZ x = vec("x"), y = vec("y");
+        const gp_XYZ n = x.Crossed(y);
+        if (x.Modulus() < 1e-12 || n.Modulus() < 1e-12) { error = "The sketch frame is degenerate"; return false; }
+        out = gp_Ax3(gp_Pnt(vec("origin")), gp_Dir(n), gp_Dir(x));
+        return true;
+    }
     if (ref.typeId() == QMetaType::QVariantMap) {
         int body = -1;
         TopoDS_Face face;

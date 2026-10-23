@@ -21,6 +21,7 @@ Drawer {
     height: parent ? parent.height : 600
     modal: true
     dim: true
+    interactive: false   // no swipe to close: a sideways drag on a tile is a drag onto the viewport
     padding: 0
 
     function reload() {
@@ -348,26 +349,29 @@ Drawer {
                         font.pixelSize: Theme.smallFont - 1
                     }
                 }
-                // Dragging a design tile onto the viewport inserts it linked (OS drag, so the panel can close)
-                Item {
-                    id: dragProxy
-                    width: 1
-                    height: 1
-                    Drag.dragType: Drag.Automatic
-                    Drag.supportedActions: Qt.CopyAction
-                    Drag.mimeData: ({ "text/uri-list": projects.urlOf(tile.modelData.path) })
-                    Drag.imageSource: tile.thumb
-                    Drag.active: tileArea.drag.active && !tile.modelData.folder
-                    Drag.onDragStarted: panel.close()
-                }
+                // Dragging a design tile onto the viewport inserts it linked. An OS drag started from C++ once the
+                // mouse has moved 8 px: binding Drag.active to the MouseArea looped (the drag blocks until the drop)
+                // and Qt cancelled it.
                 MouseArea {
                     id: tileArea
+                    property point pressAt
+                    property bool dragging: false
                     anchors.fill: parent
                     hoverEnabled: true
-                    drag.target: tile.modelData.folder ? null : dragProxy
-                    drag.threshold: 8
+                    // The grid (vertical flick) and the drawer would otherwise take the press away
+                    preventStealing: !tile.modelData.folder
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onPressed: (m) => { pressAt = Qt.point(m.x, m.y); dragging = false }
+                    onPositionChanged: (m) => {
+                        if (!pressed || dragging || tile.modelData.folder || !(m.buttons & Qt.LeftButton)) return
+                        if (Math.abs(m.x - pressAt.x) + Math.abs(m.y - pressAt.y) < 8) return
+                        dragging = true
+                        const path = tile.modelData.path
+                        panel.close()
+                        Qt.callLater(() => { projects.startDrag(path); tileArea.dragging = false })
+                    }
                     onClicked: (m) => {
+                        if (dragging) return
                         grid.currentIndex = tile.index
                         panel.current = tile.modelData
                         if (m.button === Qt.RightButton) itemMenu.popup()
@@ -388,6 +392,49 @@ Drawer {
                 horizontalAlignment: Text.AlignHCenter
                 color: Theme.textDim
                 text: "This folder is empty.\nSave a design here, or right-click for a new folder."
+            }
+        }
+        // Opening a big design runs while this panel is still up, and the dim behind it greys out the status
+        // bar, so the panel shows the same progress along its bottom edge
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 44
+            visible: fissionApp.busy
+            color: Theme.header
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 5
+                Text {
+                    Layout.fillWidth: true
+                    text: fissionApp.progressText || "Working…"
+                    color: "#9fd4f0"
+                    elide: Text.ElideRight
+                    font.pixelSize: Theme.fontSize
+                }
+                Rectangle {
+                    id: openTrack
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: Qt.darker(Theme.header, 1.6)
+                    clip: true
+                    readonly property bool indeterminate: fissionApp.progressValue < 0
+                    Rectangle {
+                        height: parent.height
+                        radius: 3
+                        color: Theme.accent
+                        width: openTrack.indeterminate ? openTrack.width * 0.3
+                                                       : openTrack.width * Math.max(0, Math.min(1, fissionApp.progressValue))
+                        Behavior on width { enabled: !openTrack.indeterminate; NumberAnimation { duration: 120 } }
+                        SequentialAnimation on x {
+                            running: openTrack.visible && openTrack.indeterminate
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 0; to: openTrack.width * 0.7; duration: 900; easing.type: Easing.InOutSine }
+                            NumberAnimation { from: openTrack.width * 0.7; to: 0; duration: 900; easing.type: Easing.InOutSine }
+                        }
+                    }
+                }
             }
         }
     }
