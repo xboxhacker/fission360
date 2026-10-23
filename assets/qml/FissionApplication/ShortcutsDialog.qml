@@ -22,7 +22,7 @@ Popup {
     readonly property var extra: [
         ["Esc", "Cancel the current input, tool or command", "General"],
         ["Enter", "OK in a command dialog; commit a typed sketch dimension", "General"],
-        ["Del", "Delete selected sketch curves / constraints, or construction geometry", "General"],
+        ["Del", "Delete selected sketch curves / constraints, construction geometry, faces (Delete Face) or bodies", "General"],
         ["S", "Search commands (toolbox)", "General"],
         ["Tab", "Next dimension box while sketching", "Sketch"],
         ["Middle drag", "Pan", "Mouse"],

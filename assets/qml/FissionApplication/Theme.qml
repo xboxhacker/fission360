@@ -36,7 +36,77 @@ QtObject {
         }
     }
 
-    function featureGlyph(type) {
+    // Fusion imports keep Fusion's type in props.fusionType. Steps with no Fission feature are ImportCAD
+    // pass-throughs, so the glyph comes from the Fusion type, not from ImportCAD (Insert STEP).
+    function featureGlyph(type, fusionType, name) {
+        if (fusionType && fusionType.length) return fusionGlyph(fusionType, name || "")
+        return fissionGlyph(type)
+    }
+
+    function fusionGlyph(raw, name) {
+        switch (raw.replace("adsk::fusion::", "")) {
+        case "Sketch": return "sketch"
+        case "ExtrudeFeature": return "extrude"
+        case "RevolveFeature": return "revolve"
+        case "FilletFeature": return "fillet"
+        case "ChamferFeature": return "chamfer"
+        case "ShellFeature": return "shell"
+        case "HoleFeature": return "hole"
+        case "SweepFeature": return "sweep"
+        case "LoftFeature": return "loft"
+        case "MirrorFeature": return "mirror"
+        case "RectangularPatternFeature": return "rectpattern"
+        case "CircularPatternFeature": return "circpattern"
+        case "PathPatternFeature": return "pathpattern"
+        case "ThreadFeature": return "thread"
+        case "CombineFeature": return "combine"
+        case "MoveFeature": return "move"
+        case "ScaleFeature": return "scale"
+        case "SplitBodyFeature": return "splitbody"
+        case "SplitFaceFeature": return "splitface"
+        case "OffsetFacesFeature": return "offsetface"
+        case "OffsetFeature": return "offsetbody"
+        case "ReplaceFaceFeature": return "replaceface"
+        case "DraftFeature": return "draft"
+        case "RibFeature": return "rib"
+        case "WebFeature": return "web"
+        case "ConstructionPlane": return "plane"
+        case "ConstructionAxis": return "axis"
+        case "ConstructionPoint": return "point"
+        case "Joint": case "AsBuiltJoint": return "joint"
+        case "FlangeFeature": return "edgeflange"
+        case "HemFeature": return "hem"
+        case "BendFeature": return "bend"
+        case "UnfoldFeature": return "unfold"
+        case "RefoldFeature": return "refold"
+        case "FlatPattern": return "flatpattern"
+        case "MeshReduceFeature": return "reduce"
+        case "MeshSmoothFeature": return "smooth"
+        case "MeshRemeshFeature": return "remesh"
+        case "MeshRepairFeature": return "meshrepair"
+        case "MeshPlaneCutFeature": return "planecut"
+        case "MeshShellFeature": return "shell"
+        case "MeshCombineFeature": return "combine"
+        case "MeshReverseNormalFeature": return "reversenormals"
+        case "MeshConvertFeature": return "tobrep"
+        case "MeshGenerateFaceGroupsFeature": return "facegroups"
+        // Fusion-only steps
+        case "DeleteFaceFeature": return "deleteface"
+        case "Occurrence": return "component"
+        case "Snapshot": return "position"
+        case "TimelineGroup": return "group"
+        case "BoundaryFillFeature": return "boundaryfill"
+        case "FormFeature": return "form"
+        case "ThickenFeature": return "thicken"
+        case "Feature":   // features with no public API class of their own
+            if (/mesh\s*section/i.test(name)) return "meshsection"
+            if (/^base\s*mesh/i.test(name)) return "basemesh"
+            return "basefeature"
+        default: return "fusionfeature"
+        }
+    }
+
+    function fissionGlyph(type) {
         switch (type) {
         case "Sketch": return "sketch"
         case "Extrude": return "extrude"
@@ -79,6 +149,7 @@ QtObject {
         case "MeshShell": return "shell"
         case "MeshCombine": return "combine"
         case "Remove": return "remove"
+        case "DeleteFace": return "deleteface"
         case "ImportCAD": return "importcad"
         case "BaseFlange": return "flange"
         case "EdgeFlange": return "edgeflange"

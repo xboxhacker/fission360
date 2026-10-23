@@ -33,6 +33,7 @@
 #include <BRepTools.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <QElapsedTimer>
+#include <QMap>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
@@ -953,6 +954,37 @@ bool FissionReplaceFace::compute(RebuildContext &ctx) {
         if (r.IsNull()) return fail("Replace Face failed");
     }
     replaceBody(ctx, body, GeomUtils::unify(r), id());
+    return true;
+}
+
+bool FissionDeleteFace::compute(RebuildContext &ctx) {
+    QString err;
+    QMap<int, QList<TopoDS_Face>> byBody;
+    for (const QVariant &r : list("faces")) {
+        int b = -1;
+        TopoDS_Face f;
+        if (!ctx.resolveFace(r, b, f, err)) return fail(err);
+        byBody[b] << f;
+    }
+    if (byBody.isEmpty()) return fail("Select one or more faces");
+    // Highest body first: a body that splits into lumps inserts new bodies after itself
+    for (auto it = byBody.constEnd(); it != byBody.constBegin();) {
+        --it;
+        const TopoDS_Shape shape = ctx.bodies[it.key()].shape;
+        if (MeshUtils::isMesh(shape)) return fail("Delete Face works on solid bodies, not meshes");
+        BRepAlgoAPI_Defeaturing defeat;
+        defeat.SetShape(shape);
+        for (const TopoDS_Face &f : it.value()) defeat.AddFaceToRemove(f);
+        defeat.SetToFillHistory(Standard_False);
+        Handle(StepTimeLimit) limit = new StepTimeLimit(20000);
+        defeat.Build(limit->Start());
+        if (limit->expired()) return fail("Delete Face took longer than 20 s and was stopped");
+        if (!defeat.IsDone() || defeat.Shape().IsNull() || GeomUtils::solids(defeat.Shape()).isEmpty())
+            return fail("The faces around it cannot close the gap, so this face cannot be deleted");
+        if (!BRepCheck_Analyzer(defeat.Shape()).IsValid())
+            return fail("Deleting this face leaves an invalid solid");
+        replaceBody(ctx, it.key(), defeat.Shape(), id());
+    }
     return true;
 }
 

@@ -662,6 +662,75 @@ Item {
             c.strokeStyle = "#d9534f"
             poly(c, [[15, 3], [22, 10]], false, false); poly(c, [[22, 3], [15, 10]], false, false)
             break
+        case "deleteface":
+            // a box whose top face is gone (dashed red) and a minus; not Insert STEP or Remove
+            poly(c, [[3, 11], [14, 11], [14, 21], [3, 21]], true, true)
+            poly(c, [[14, 11], [19, 6], [19, 16], [14, 21]], true, true)
+            c.strokeStyle = "#d9534f"
+            c.setLineDash([2, 2]); poly(c, [[3, 11], [8, 6], [19, 6], [14, 11]], true, false); c.setLineDash([])
+            poly(c, [[16, 2.5], [22, 2.5]], false, false)
+            break
+        // ---- Fusion-only timeline steps (no Fission tool; imported as pass-through snapshots)
+        case "component":
+            // an occurrence: a part inside the component frame
+            poly(c, [[2, 7], [2, 2], [7, 2]], false, false); poly(c, [[17, 2], [22, 2], [22, 7]], false, false)
+            poly(c, [[22, 17], [22, 22], [17, 22]], false, false); poly(c, [[7, 22], [2, 22], [2, 17]], false, false)
+            box(c, 6, 7, 9, 9, 3)
+            break
+        case "position":
+            // a captured position: parts plus a map pin
+            box(c, 2, 10, 10, 9, 3)
+            c.beginPath(); c.arc(17.5, 7, 4, Math.PI, 0); c.lineTo(17.5, 15); c.closePath(); c.fill(); c.stroke()
+            dot(c, 17.5, 7, 1.3)
+            break
+        case "group":
+            // a timeline group: three chips under one bracket
+            for (let k = 0; k < 3; ++k)
+                poly(c, [[3 + k * 6.5, 9], [8 + k * 6.5, 9], [8 + k * 6.5, 15], [3 + k * 6.5, 15]], true, true)
+            poly(c, [[2, 5], [2, 3], [22, 3], [22, 5]], false, false)
+            poly(c, [[2, 19], [2, 21], [22, 21], [22, 19]], false, false)
+            break
+        case "boundaryfill":
+            // a cell closed by surfaces, filled into a solid
+            c.beginPath(); c.moveTo(4, 8); c.bezierCurveTo(9, 3, 15, 3, 20, 8); c.lineTo(20, 17)
+            c.bezierCurveTo(15, 13, 9, 13, 4, 17); c.closePath(); c.fill(); c.stroke()
+            c.setLineDash([2, 2])
+            c.beginPath(); c.moveTo(1, 9.5); c.bezierCurveTo(8, 1.5, 16, 1.5, 23, 9.5); c.stroke()
+            c.beginPath(); c.moveTo(1, 18.5); c.bezierCurveTo(8, 11.5, 16, 11.5, 23, 18.5); c.stroke()
+            c.setLineDash([])
+            break
+        case "form":
+            // T-spline body: a smooth blob in its control cage
+            c.beginPath(); c.moveTo(5, 15); c.bezierCurveTo(3, 6, 12, 3, 17, 6); c.bezierCurveTo(22, 9, 21, 18, 13, 19)
+            c.bezierCurveTo(9, 19.5, 6, 18, 5, 15); c.closePath(); c.fill(); c.stroke()
+            c.setLineDash([1.5, 1.5]); poly(c, [[3, 4], [20, 3], [22, 20], [4, 21]], true, false); c.setLineDash([])
+            for (const q of [[3, 4], [20, 3], [22, 20], [4, 21]]) dot(c, q[0], q[1], 1.4)
+            break
+        case "thicken":
+            // a surface sheet grown into a wall
+            c.beginPath(); c.moveTo(2, 16); c.bezierCurveTo(8, 10, 14, 10, 20, 14); c.lineTo(20, 18)
+            c.bezierCurveTo(14, 14, 8, 14, 2, 20); c.closePath(); c.fill(); c.stroke()
+            poly(c, [[11, 11], [11, 3]], false, false); poly(c, [[8.5, 5.5], [11, 3], [13.5, 5.5]], false, false)
+            break
+        case "basefeature":
+            // a base feature: a body edited directly, outside the parametric history
+            box(c, 2, 9, 10, 10, 4)
+            poly(c, [[14, 17], [20, 4], [22.5, 5.2], [16.5, 18.2], [13.5, 19.5]], true, true)
+            break
+        case "basemesh":
+            poly(c, [[2, 20], [8, 7], [13, 20]], true, true); poly(c, [[8, 7], [15, 15], [13, 20]], true, true)
+            poly(c, [[15, 18], [20, 5], [22.5, 6.2], [17.5, 19.2], [14.5, 20.5]], true, true)
+            break
+        case "meshsection":
+            poly(c, [[3, 20], [10, 4], [16, 20]], true, true); poly(c, [[10, 4], [21, 15], [16, 20]], true, true)
+            c.strokeStyle = "#d9534f"
+            c.setLineDash([2, 2]); poly(c, [[4, 15], [17, 11], [20, 15], [7, 18]], true, false); c.setLineDash([])
+            break
+        case "fusionfeature":
+            // a Fusion step Fission has no tool or icon for
+            box(c, 2, 8, 11, 11, 4)
+            dot(c, 15.5, 21, 1.5); dot(c, 19, 21, 1.5); dot(c, 22.5, 21, 1.5)
+            break
         case "importcad":
             box(c, 3, 11, 9, 8, 3)
             poly(c, [[19, 2], [19, 12]], false, false); poly(c, [[15.5, 8.5], [19, 12], [22.5, 8.5]], false, false)

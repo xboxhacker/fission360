@@ -13,6 +13,23 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
+### 1.13.37 — Fusion timeline order, Delete Face, timeline wheel
+- **Fusion exporter 1.8** (`F3D_Bulk_Export`):
+  - Collapsed timeline groups are expanded for the export and collapsed again afterwards. A collapsed group is one timeline row in Fusion's API, and its children have no index. Exporters up to 1.7 never wrote those children as rows and could not roll the marker into them.
+  - Features and sketches now come from each timeline row's own entity. Before, the exporter walked every occurrence: two copies of a component wrote their features twice, and an inserted design added its own history, numbered by its own timeline. Those numbers collided with this design's rows.
+  - Bodies are listed once per component, not once per occurrence.
+- **Fusion import**:
+  - A timeline row only takes a feature or sketch whose name and type match it. A plane row no longer becomes `Extrude2` from an inserted design.
+  - Features and sketches that are not timeline rows are no longer appended at the end of the timeline.
+  - Unknown Fusion rows without a snapshot (joints, for example) stay as chips instead of being dropped, so the chip count matches Fusion's timeline.
+  - Rows inside a group remember the group name and show it in the chip tooltip. Files already converted and saved by 1.13.35 keep their old chips; re-export from Fusion with add-in 1.8.
+- **Timeline icons**:
+  - Imported steps take their icon from the Fusion type. Every Fusion step that has no Fission tool used to show the Insert STEP glyph.
+  - New glyphs: Delete Face, Component (occurrence), Position (snapshot), Group, Boundary Fill, Form (T-spline), Thicken, Base Feature, Base Mesh Feature, Mesh Section, and a generic Fusion-step glyph for other types.
+  - Fusion types that have a Fission tool (Move, Flange, Unfold, Refold, Mesh Reduce, Generate Face Groups, and others) use that tool's glyph.
+- **Delete Face** (SOLID ▸ MODIFY, or select faces and press Delete): removes the faces and grows the faces around them to close the solid (OCCT defeaturing), like Fusion. It handles hole walls, fillets, chamfers and bosses. If the neighbours cannot close the gap, the body is left unchanged and the status bar says why. Delete with only whole bodies selected still removes the bodies. Before, Delete on a face removed the whole body. Selftests: a hole wall deleted from a 40×20×10 plate gives 8000 mm³; deleting every fillet face of a filleted cube gives 1000 mm³.
+- **Timeline wheel**: the wheel (and a horizontal or touchpad scroll) only slides the strip, 8 chips a notch, or one with Ctrl. It no longer moves the marker. The marker moves with the arrow buttons, by dragging it, or with **Move Marker Here** / **Move Marker Before** on a chip's right-click menu (formerly Roll Back To Here / Before).
+
 ### 1.13.36 — Hotfix: 1.13.35 would not start
 - **Startup**: the 1.13.35 build quit at launch with no window. `TimelinePanel.qml` set `pressDelay` on a `MouseArea` (that property only exists on `Flickable`), so `MainWindow` failed to load. The line is removed.
 - **Packaging**: `scripts/package-windows.ps1` now launches the packaged exe and refuses to write the zip if it exits within 10 s or logs a QML load error. Build leftovers (`*.exp`, `*.lib`, `*.pdb`, `*.ilk`, `Fission360.previous.exe`) are no longer copied into the release.

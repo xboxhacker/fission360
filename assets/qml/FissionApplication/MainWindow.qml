@@ -610,7 +610,7 @@ ApplicationWindow {
             p.bodies = bodyIndices(items.filter(x => x.kind === "body" || x.kind === "face"))
             if (type === "PathPattern" && selectedOf("sketchcurve").length) p.path = selectedOf("sketchcurve")[0].sketch
             break
-        case "SplitFace": case "OffsetFace": case "ReplaceFace": case "Offset":
+        case "SplitFace": case "OffsetFace": case "ReplaceFace": case "Offset": case "DeleteFace":
             p.faces = selectedOf("face")
             break
         case "Draft": {
@@ -1566,6 +1566,20 @@ ApplicationWindow {
                                               : "Remove failed" + (f ? ": " + f.error : ""))
     }
 
+    function deleteFaces(faces) {
+        if (!doc || !faces.length) return
+        if (commandFeatureId) finishCommand(true)
+        const f = doc.addFeature("DeleteFace", { faces: faces })
+        if (f && f.healthy) {
+            fissionApp.showMessage("Deleted " + faces.length + (faces.length > 1 ? " faces" : " face"))
+            return
+        }
+        // Leave the body as it was rather than a red feature in the timeline
+        const why = f ? f.error : ""
+        if (f) doc.removeFeature(f)
+        fissionApp.showMessage("Delete Face failed" + (why ? ": " + why : ""))
+    }
+
     function setSelectionTool(tool) {
         selectionTool = tool
         const names = { window: "Window selection: drag a box (left to right = fully inside, right to left = touching)",
@@ -1668,6 +1682,10 @@ ApplicationWindow {
             cmd("Select All", "Ctrl+A", "Select", "any", () => selectAll()),
             cmd("Remove Selected Bodies", "Del", "Modify", "model", () =>
                 removeBodies(bodyIndices(selection.items.filter(x => x.kind === "body" || x.kind === "face")))),
+            cmd("Delete Face", "Del", "Modify", "model", () => {
+                if (selectedOf("face").length) deleteFaces(selectedOf("face"))
+                else startCommand("DeleteFace")
+            }),
             cmd("Fit", "F6", "View", "any", () => viewportItem.renderer.fitAll(true)),
             cmd("Home View", "", "View", "any", () => goHome()),
             cmd("Compute All", "Ctrl+B", "Design", "any", () => { doc.rebuild(); fissionApp.showMessage("Recomputed the timeline") }),
@@ -1856,9 +1874,12 @@ ApplicationWindow {
             const ids = []
             for (const it of win.selection.items)
                 if (it.kind === "plane" || it.kind === "axis" || it.kind === "point") ids.push(it.id)
-            const bodies = win.bodyIndices(win.selection.items.filter(x => x.kind === "body" || x.kind === "face"))
-            if (!ids.length && !bodies.length) return
+            // Faces: Delete Face (the body heals over them). Whole bodies: Remove.
+            const faces = win.selectedOf("face")
+            const bodies = win.bodyIndices(win.selection.items.filter(x => x.kind === "body"))
+            if (!ids.length && !bodies.length && !faces.length) return
             win.selection.clear()
+            if (faces.length) win.deleteFaces(faces)
             if (bodies.length) win.removeBodies(bodies)
             for (const id of ids) win.deleteFeature(win.doc.featureById(id))
         }

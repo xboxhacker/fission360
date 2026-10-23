@@ -15,7 +15,8 @@ Rectangle {
     implicitHeight: 46
     color: Theme.panel
 
-    // Wheel moves the marker several features at a time. Shift+wheel only slides the strip.
+    // The wheel only slides the strip (8 chips a notch, Ctrl one). The marker moves with the arrow buttons,
+    // a drag of the marker, or Move Marker Here on a chip.
     function revealIndex(i) {
         if (!panel.timeline || i < 0) return
         const x = i * (panel.itemWidth + 2)
@@ -46,20 +47,13 @@ Rectangle {
     WheelHandler {
         onWheel: (event) => {
             if (!panel.timeline) return
-            let dy = event.angleDelta.y
-            if (dy === 0) dy = event.pixelDelta.y
-            if (dy === 0) return
+            let d = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+            if (d === 0) d = event.pixelDelta.y !== 0 ? event.pixelDelta.y : event.pixelDelta.x
+            if (d === 0) return
             const jump = (event.modifiers & Qt.ControlModifier) ? 1 : 8
-            const steps = Math.round((-dy / 120) * jump)
-            if (steps === 0) return
-            if (event.modifiers & Qt.ShiftModifier) {
-                const limit = Math.max(0, flick.contentWidth - flick.width)
-                flick.contentX = Math.max(0, Math.min(limit, flick.contentX + steps * (panel.itemWidth + 2)))
-            } else {
-                const next = Math.max(0, Math.min(panel.timeline.count, panel.timeline.marker + steps))
-                if (next !== panel.timeline.marker) panel.timeline.marker = next
-                panel.revealIndex(next)
-            }
+            const dx = (-d / 120) * jump * (panel.itemWidth + 2)
+            const limit = Math.max(0, flick.contentWidth - flick.width)
+            flick.contentX = Math.max(0, Math.min(limit, flick.contentX + dx))
         }
     }
     Connections {
@@ -121,6 +115,9 @@ Rectangle {
                         required property int index
                         readonly property bool editing: feature && (feature.id === panel.app.commandFeatureId || feature.id === panel.app.activeSketchId)
                         readonly property bool picked: feature && feature.id === panel.selectedId
+                        // get(), not props: props would copy the Fusion snapshot blob into JS for every chip
+                        readonly property string fusionType: feature ? (feature.get("fusionType") || "") : ""
+                        readonly property string fusionGroup: feature ? (feature.get("fusionGroup") || "") : ""
                         width: panel.itemWidth
                         height: 34
                         radius: 3
@@ -133,7 +130,7 @@ Rectangle {
                             anchors.centerIn: parent
                             width: 24
                             height: 24
-                            name: Theme.featureGlyph(chip.type)
+                            name: Theme.featureGlyph(chip.type, chip.fusionType, chip.name)
                             color: chip.suppressed ? "#9aa1a8" : Theme.featureColor(chip.type)
                         }
                         Rectangle {   // suppressed strike-through
@@ -163,6 +160,7 @@ Rectangle {
                         ToolTip.visible: chipArea.containsMouse
                         ToolTip.delay: 400
                         ToolTip.text: chip.name + (chip.suppressed ? " (suppressed)" : "")
+                                      + (chip.fusionGroup.length ? "\nGroup: " + chip.fusionGroup : "")
                                       + (chip.error.length ? "\n\u26a0 " + chip.error : "")
                     }
                 }
@@ -213,8 +211,8 @@ Rectangle {
             text: menu.target && menu.target.suppressed ? "Unsuppress" : "Suppress"
             onTriggered: { panel.app.doc.checkpoint(); menu.target.suppressed = !menu.target.suppressed }
         }
-        MenuItem { text: "Roll Back To Here"; onTriggered: panel.timeline.marker = menu.targetIndex + 1 }
-        MenuItem { text: "Roll Back Before"; onTriggered: panel.timeline.marker = menu.targetIndex }
+        MenuItem { text: "Move Marker Here"; onTriggered: panel.timeline.marker = menu.targetIndex + 1 }
+        MenuItem { text: "Move Marker Before"; onTriggered: panel.timeline.marker = menu.targetIndex }
         MenuSeparator {}
         MenuItem {
             text: "Move Earlier"

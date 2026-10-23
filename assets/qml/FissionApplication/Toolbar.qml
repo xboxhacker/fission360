@@ -202,6 +202,7 @@ Rectangle {
                 "-",
                 cmd("Offset Face", "offsetface", "OffsetFace"),
                 cmd("Replace Face", "replaceface", "ReplaceFace"),
+                cmd("Delete Face", "deleteface", "DeleteFace"),
                 cmd("Split Face", "splitface", "SplitFace"),
                 cmd("Split Body", "splitbody", "SplitBody"),
                 cmd("Offset", "offsetbody", "Offset", undefined, "Offset: copies of faces or bodies"),

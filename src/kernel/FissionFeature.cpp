@@ -682,6 +682,7 @@ FissionFeature *FissionFeature::create(const QString &type, QObject *parent) {
     else if (type == "Rib") f = new FissionRib(parent);
     else if (type == "Web") f = new FissionWeb(parent);
     else if (type == "Remove") f = new FissionRemove(parent);
+    else if (type == "DeleteFace") f = new FissionDeleteFace(parent);
     else if (type == "InsertMesh") f = new FissionInsertMesh(parent);
     else if (type == "MeshConvert") f = new FissionMeshConvert(parent);
     else if (type == "MeshReverse") f = new FissionMeshReverse(parent);
@@ -727,6 +728,6 @@ QStringList FissionFeature::types() {
     return {"Sketch", "Extrude", "Revolve", "Fillet", "Chamfer", "Loft", "Sweep", "Shell", "Mirror",
             "RectangularPattern", "CircularPattern", "ConstructionPlane", "ConstructionAxis", "ConstructionPoint",
             "Hole", "Thread", "Combine", "Move", "Scale", "SplitBody", "SplitFace", "OffsetFace", "Offset",
-            "ReplaceFace", "Draft", "Joint", "PathPattern", "Rib", "Web", "Remove", "InsertMesh", "MeshConvert", "MeshReverse",
+            "ReplaceFace", "Draft", "Joint", "PathPattern", "Rib", "Web", "Remove", "DeleteFace", "InsertMesh", "MeshConvert", "MeshReverse",
             "MeshSmooth", "MeshReduce", "MeshPlaneCut", "MeshRepair", "MeshShell", "MeshCombine", "MeshFaceGroups", "MeshRemesh", "ImportCAD", "BaseFlange", "EdgeFlange", "FlatPattern", "Hem", "Tab", "Bend", "ContourFlange", "Unfold", "Refold"};
 }

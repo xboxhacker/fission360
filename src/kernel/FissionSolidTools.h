@@ -166,6 +166,18 @@ protected:
     bool compute(RebuildContext &ctx) override;
 };
 
+// props: faces (face refs, on one or more bodies). Removes the faces and grows their neighbours over the gap
+// (OCCT defeaturing), like Fusion's Delete Face. Fails when the neighbours cannot close the solid.
+class FissionDeleteFace : public FissionFeature {
+    Q_OBJECT
+public:
+    explicit FissionDeleteFace(QObject *parent = nullptr) : FissionFeature(parent) {}
+    QString type() const override { return QStringLiteral("DeleteFace"); }
+    QVariantMap defaults() const override { return {{"faces", QVariantList()}}; }
+protected:
+    bool compute(RebuildContext &ctx) override;
+};
+
 // props: faces (face refs on one body), plane (pull direction / parting plane; "" = XY), angle, flip,
 // draftType "face" | "parting" (parting: both sides of the plane taper away from it).
 // plane may also be non-planar: a cylindrical / conical / revolved face (its axis), a straight edge, a

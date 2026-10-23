@@ -6,7 +6,7 @@
 	"description": {
 		"": "Bulk export designs from the Data Panel to .f360 format for Fission 360"
 	},
-	"version": "1.7.0",
+	"version": "1.8.0",
 	"runOnStartup": false,
 	"supportedOS": "windows|mac",
 	"editEnabled": true

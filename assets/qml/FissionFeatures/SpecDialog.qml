@@ -334,6 +334,10 @@ FeatureDialog {
             { kind: "note", text: "Folds back the sheet of the last Unfold. Cuts and additions made while it was flat follow "
                                   + "the bends." }
         ],
+        DeleteFace: [
+            { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face" },
+            { kind: "note", text: "The faces are removed and the faces around them grow to close the solid (holes, fillets, chamfers, bosses)." }
+        ],
         Remove: [
             { kind: "selection", label: "Bodies", key: "bodies", sel: "bodies", filter: "body,face" },
             { kind: "note", text: "The bodies are removed from this point of the timeline on; delete or roll back this feature to bring them back." }

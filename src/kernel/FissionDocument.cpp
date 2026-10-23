@@ -2191,23 +2191,33 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
             const QString name = entry["name"].toString();
             const QString mapped = mapFusionType(rawType);
 
+            // Exporters before 1.8 walked every component copy and inserted design, so a feature or sketch
+            // with this row's index can belong to another timeline. Only take one whose name and type match.
+            auto matchesRow = [&](const QJsonObject &o, bool checkType) {
+                if (o.isEmpty()) return false;
+                if (!name.isEmpty() && o["name"].toString() != name) return false;
+                return !checkType || rawType.isEmpty() || rawType == QLatin1String("unknown")
+                    || o["type"].toString() == rawType;
+            };
             if (mapped == "Sketch" || rawType.contains("Sketch", Qt::CaseInsensitive)) {
                 QJsonObject sk = sketchByIndex.value(idx);
-                if (sk.isEmpty()) sk = sketchByName.value(name);
-                if (!sk.isEmpty()) appendSketch(sk);
+                if (!matchesRow(sk, false)) sk = sketchByName.value(name);
+                if (!matchesRow(sk, false)) sk = QJsonObject{{"name", name.isEmpty() ? QStringLiteral("Sketch") : name},
+                                                             {"timelineIndex", idx}};
+                appendSketch(sk);
                 continue;
             }
 
             QJsonObject srcFeat = featByIndex.value(idx);
-            if (srcFeat.isEmpty()) srcFeat = featByName.value(name);
-            if (srcFeat.isEmpty()) {
+            if (!matchesRow(srcFeat, true)) srcFeat = featByName.value(name);
+            if (!matchesRow(srcFeat, true)) {
                 srcFeat = QJsonObject{{"name", name.isEmpty() ? mapped : name},
                                       {"type", rawType},
                                       {"timelineIndex", idx},
                                       {"isSuppressed", entry["isSuppressed"].toBool(false)}};
             }
+            if (entry.contains("group")) srcFeat["fusionGroup"] = entry["group"];
             const bool hasSnap = entry.contains("stepData") || entry["stepEmpty"].toBool(false);
-            if (mapped.isEmpty() && !hasSnap) continue;
             QString sketchId = lastSketchId;
             const QString prof = srcFeat["profileSketch"].toString();
             if (!prof.isEmpty() && sketchIdByName.contains(prof))
@@ -2235,13 +2245,17 @@ static QJsonObject convertFromFusionExport(const QJsonObject &src) {
         }
     }
 
-    // Any sketches / features not referenced by the timeline list
+    // Sketches / features not in the timeline list. With a timeline every row is already a chip: the rest are
+    // other copies of components, the history of inserted designs, or children of a collapsed group (exporter
+    // before 1.8), and appending them at the end made the timeline longer than the Fusion one.
+    if (tlArr.isEmpty())
     for (auto it = sketchByName.begin(); it != sketchByName.end(); ++it) {
         const int ti = it.value()["timelineIndex"].toInt(-1);
         if (ti >= 0 && usedSketchIdx.contains(ti)) continue;
         if (sketchIdByName.contains(it.key())) continue;
         appendSketch(it.value());
     }
+    if (tlArr.isEmpty())
     for (auto it = featByName.begin(); it != featByName.end(); ++it) {
         const int ti = it.value()["timelineIndex"].toInt(-1);
         if (ti >= 0 && usedFeatIdx.contains(ti)) continue;

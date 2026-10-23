@@ -30,7 +30,7 @@ Rectangle {
         case "OffsetFace": case "Offset": case "ReplaceFace": case "Draft": case "PathPattern": case "Rib": case "Web": case "Joint":
         case "InsertMesh": case "MeshConvert": case "MeshReverse": case "MeshSmooth": case "MeshReduce": case "MeshPlaneCut":
         case "MeshRepair": case "MeshShell": case "MeshCombine": case "MeshFaceGroups": case "MeshRemesh":
-        case "Remove": case "ImportCAD": case "BaseFlange": case "EdgeFlange": case "FlatPattern":
+        case "Remove": case "DeleteFace": case "ImportCAD": case "BaseFlange": case "EdgeFlange": case "FlatPattern":
         case "Hem": case "Tab": case "Bend": case "ContourFlange": case "Unfold": case "Refold":
             return "SpecDialog.qml"
         default: return "ConstructionDialog.qml"

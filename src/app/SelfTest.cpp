@@ -459,6 +459,81 @@ void testFacePatternCut() {
           "face pattern: three holes cut into the plate", status(&doc));
 }
 
+// Delete Face: the hole wall goes and the top / bottom grow over it; a fillet face goes and its edge is sharp again
+void testDeleteFace() {
+    {
+        FissionDocument doc;
+        auto *s = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        s->addRectangle(0, 0, 40, 20);
+        s->addCircle(10, 10, 3);
+        doc.rebuild();
+        extrude(&doc, s, 10);
+        int cyl = -1;
+        const auto faces = GeomUtils::faceMap(doc.body(0)->shape());
+        for (int i = 1; i <= faces.Extent(); ++i)
+            if (BRepAdaptor_Surface(TopoDS::Face(faces(i))).GetType() == GeomAbs_Cylinder) { cyl = i - 1; break; }
+        check(cyl >= 0, "delete face: found the hole face");
+        if (cyl < 0) return;
+        auto *del = doc.addFeature("DeleteFace", {{"faces", QVariantList{GeomUtils::faceRef(0, doc.body(0)->shape(), cyl)}}});
+        check(del && del->isHealthy() && doc.bodyCount() == 1 && near(totalVolume(&doc), 40 * 20 * 10, 1e-3),
+              "delete face: hole wall removed and the plate closed", status(&doc));
+        check(BRepCheck_Analyzer(doc.body(0)->shape()).IsValid(), "delete face: result is a valid solid");
+    }
+    {
+        FissionDocument doc;
+        extrude(&doc, rectSketch(&doc, "XY", 0, 0, 10, 10), "10 mm", "newBody");
+        const double before = totalVolume(&doc);
+        doc.addFeature("Fillet", {{"edges", QVariantList{}}, {"body", 0}, {"allEdges", true}, {"radius", "2 mm"}});
+        check(totalVolume(&doc) < before - 1, "delete face: fillets made", status(&doc));
+        QVariantList rounds;
+        const auto faces = GeomUtils::faceMap(doc.body(0)->shape());
+        for (int i = 1; i <= faces.Extent(); ++i)
+            if (BRepAdaptor_Surface(TopoDS::Face(faces(i))).GetType() != GeomAbs_Plane)
+                rounds << GeomUtils::faceRef(0, doc.body(0)->shape(), i - 1);
+        auto *del = doc.addFeature("DeleteFace", {{"faces", rounds}});
+        check(del && del->isHealthy() && near(totalVolume(&doc), 1000, 1e-3),
+              "delete face: removing every fillet face gives the sharp cube back", status(&doc));
+    }
+}
+
+// Fusion import keeps Fusion's timeline: one chip per row, in order. Exporters before 1.8 also wrote features of
+// inserted designs (their own timeline indices) and children of collapsed groups (index -1); none of those may
+// take a row's place or be appended at the end.
+void testFusionTimelinePairing() {
+    QTemporaryDir dir;
+    const QJsonObject fusion{
+        {"metadata", QJsonObject{{"exportedFrom", "Fusion 360"}, {"exporterVersion", "1.7"}}},
+        {"document", QJsonObject{{"name", "Pairing"}}},
+        {"timeline", QJsonArray{
+            QJsonObject{{"index", 0}, {"type", "adsk::fusion::Sketch"}, {"name", "Sketch1"}},
+            QJsonObject{{"index", 1}, {"type", "adsk::fusion::ConstructionPlane"}, {"name", "Plane1"}},
+            QJsonObject{{"index", 2}, {"type", "adsk::fusion::Joint"}, {"name", "Joint1"}},
+            QJsonObject{{"index", 3}, {"type", "adsk::fusion::ExtrudeFeature"}, {"name", "Extrude1"}}}},
+        {"features", QJsonArray{
+            QJsonObject{{"name", "Extrude2"}, {"type", "adsk::fusion::ExtrudeFeature"}, {"timelineIndex", 1}},
+            QJsonObject{{"name", "Extrude1"}, {"type", "adsk::fusion::ExtrudeFeature"}, {"timelineIndex", 3}},
+            QJsonObject{{"name", "Fillet9"}, {"type", "adsk::fusion::FilletFeature"}, {"timelineIndex", -1}}}},
+        {"sketches", QJsonArray{
+            QJsonObject{{"name", "Sketch1"}, {"timelineIndex", 0}},
+            QJsonObject{{"name", "SketchX"}, {"timelineIndex", -1}}}},
+        {"bodies", QJsonArray{}}};
+    const QString path = dir.filePath("pairing.f360");
+    {
+        QFile f(path);
+        f.open(QIODevice::WriteOnly);
+        f.write(QJsonDocument(fusion).toJson());
+    }
+    FissionDocument doc;
+    check(doc.load(path), "fusion pairing: file loads", doc.lastError());
+    QStringList got;
+    for (FissionFeature *f : doc.timeline()->features()) got << f->type() + ":" + f->name();
+    check(got == QStringList{"Sketch:Sketch1", "ConstructionPlane:Plane1", "ImportCAD:Joint1", "Extrude:Extrude1"},
+          "fusion pairing: one chip per Fusion row, in order, with that row's name and type", got.join(", "));
+    FissionFeature *joint = doc.timeline()->features().value(2);
+    const QString jointType = joint ? joint->get("fusionType").toString() : QString();
+    check(jointType == "adsk::fusion::Joint", "fusion pairing: an unmapped row keeps its Fusion type", jointType);
+}
+
 void testPatternsAndMirror() {
     FissionDocument doc;
     auto *s = rectSketch(&doc, "XY", 10, 0, 10, 10);
@@ -3327,7 +3402,9 @@ int run() {
     testRevolveLoftSweep();
     testPatternsAndMirror();
     testFacePatternCut();
+    testDeleteFace();
     testSketchOnFaceAndFiles();
+    testFusionTimelinePairing();
     testConstraints();
     testLoftFromFace();
     testHandlesAndMeshExport();

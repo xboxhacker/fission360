@@ -20,7 +20,7 @@ import traceback, json, os, time, tempfile, base64, re, struct
 CMD_ID = 'F360_FissionExporter'
 CMD_NAME = 'Export to Fission360'
 CMD_DESC = 'Export designs to .f360 (STEP BRep + timeline + sketches)'
-EXPORTER_VERSION = '1.7'
+EXPORTER_VERSION = '1.8'
 
 handlers = []
 app = None
@@ -608,6 +608,55 @@ def export_document_to_f360(doc, out_path, include_step=True, unhide=False, prog
             'source': 'F3D_Bulk_Export',
         },
     }
+    # A collapsed group is one timeline row and its children have no index, so they would never be exported
+    # or reachable with markerPosition. Expand them for the export and collapse them again at the end.
+    expanded = expand_timeline_groups(design)
+    try:
+        return _export_design(doc, design, payload, out_path, include_step, progress_cb, per_step)
+    finally:
+        collapse_timeline_groups(expanded)
+
+
+def expand_timeline_groups(design):
+    groups = []
+    try:
+        for g in design.timeline.timelineGroups:
+            try:
+                if g.isCollapsed:
+                    g.isCollapsed = False
+                    groups.append(g)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return groups
+
+
+def collapse_timeline_groups(groups):
+    for g in groups:
+        try:
+            g.isCollapsed = True
+        except Exception:
+            pass
+
+
+def unique_components(design):
+    """Root plus each component once. allOccurrences lists every copy of a component."""
+    root = design.rootComponent
+    comps, seen = [root], {root.entityToken}
+    try:
+        for occ in root.allOccurrences:
+            c = occ.component
+            if c.entityToken not in seen:
+                seen.add(c.entityToken)
+                comps.append(c)
+    except Exception:
+        pass
+    return comps
+
+
+def _export_design(doc, design, payload, out_path, include_step, progress_cb, per_step):
+    root = design.rootComponent
     try:
         marker = int(design.timeline.markerPosition)
         payload['timelineMarker'] = marker
@@ -630,33 +679,57 @@ def export_document_to_f360(doc, out_path, include_step=True, unhide=False, prog
 
     if progress_cb:
         progress_cb('Timeline…')
-    tl = design.timeline
-    for i in range(tl.count):
-        try:
-            obj = tl.item(i)
-            entry = {
-                'index': i,
-                'type': str(obj.entity.objectType) if obj.entity else str(obj.objectType),
-                'name': obj.name if hasattr(obj, 'name') else '',
-                'isSuppressed': bool(obj.isSuppressed) if hasattr(obj, 'isSuppressed') else False,
-            }
-            payload['timeline'].append(entry)
-        except Exception:
-            payload['timeline'].append({'index': i, 'type': 'unknown', 'name': ''})
+    # Features and sketches come from each timeline row's own entity, so row i and its data always match.
+    # Walking components instead mixed in every copy of a component and the history of inserted designs,
+    # whose timeline indices belong to their own design and collide with this one.
+    tl_features, tl_sketches = [], []
+    try:
+        tl = design.timeline
+        for i in range(tl.count):
+            try:
+                obj = tl.item(i)
+                ent = obj.entity
+                entry = {
+                    'index': i,
+                    'type': str(ent.objectType) if ent else str(obj.objectType),
+                    'name': obj.name if hasattr(obj, 'name') else '',
+                    'isSuppressed': bool(obj.isSuppressed) if hasattr(obj, 'isSuppressed') else False,
+                }
+                try:
+                    if obj.parentGroup:
+                        entry['group'] = obj.parentGroup.name
+                except Exception:
+                    pass
+                payload['timeline'].append(entry)
+            except Exception:
+                payload['timeline'].append({'index': i, 'type': 'unknown', 'name': ''})
+                continue
+            if not ent:
+                continue
+            try:
+                sk = adsk.fusion.Sketch.cast(ent)
+                if sk:
+                    d = sketch_to_dict(sk)
+                    d['timelineIndex'] = i
+                    tl_sketches.append(d)
+                else:
+                    d = feature_summary(ent)
+                    d['timelineIndex'] = i
+                    tl_features.append(d)
+            except Exception:
+                pass
+    except Exception:
+        pass   # direct-modeling design: no timeline
 
     if progress_cb:
         progress_cb('Features / sketches…')
-    data = walk_component(root)
-    try:
-        for occ in root.allOccurrences:
-            merge_walk(data, walk_component(occ.component))
-    except Exception:
-        for occ in root.occurrences:
-            merge_walk(data, walk_component(occ.component))
+    data = {'features': [], 'bodies': [], 'sketches': [], 'construction': []}
+    for comp in unique_components(design):
+        merge_walk(data, walk_component(comp))
 
-    payload['features'] = data['features']
+    payload['features'] = tl_features if payload['timeline'] else data['features']
+    payload['sketches'] = tl_sketches if payload['timeline'] else data['sketches']
     payload['bodies'] = data['bodies']
-    payload['sketches'] = data['sketches']
     payload['construction']['planes'] = data['construction']
 
     try:
