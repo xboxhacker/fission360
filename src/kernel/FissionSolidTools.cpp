@@ -3,6 +3,7 @@
 #include "FissionSolidTools.h"
 #include "FissionSketch.h"
 #include "GeomUtils.h"
+#include "TimeLimit.h"
 #include "MeshUtils.h"
 
 #include <BRepAdaptor_CompCurve.hxx>
@@ -25,19 +26,19 @@
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepFeat_SplitShape.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
+#include <IntAna_QuadQuadGeo.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepLib.hxx>
 #include <BRepTools.hxx>
-#include <Message_ProgressIndicator.hxx>
-#include <QElapsedTimer>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <QMap>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
@@ -49,6 +50,7 @@
 #include <TopTools_ListOfShape.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Solid.hxx>
 #include <gp_GTrsf.hxx>
 #include <gp_Pln.hxx>
 #include <algorithm>
@@ -522,19 +524,6 @@ bool FissionSplitFace::compute(RebuildContext &ctx) {
     return true;
 }
 
-// Stops an OCCT algorithm that would otherwise freeze the window on a busy solid.
-class StepTimeLimit : public Message_ProgressIndicator {
-public:
-    explicit StepTimeLimit(qint64 ms) : m_ms(ms) { m_timer.start(); }
-    Standard_Boolean UserBreak() override { return m_timer.elapsed() > m_ms; }
-    void Show(const Message_ProgressScope &, const Standard_Boolean) override {}
-    bool expired() const { return m_timer.elapsed() > m_ms; }
-
-private:
-    QElapsedTimer m_timer;
-    qint64 m_ms;
-};
-
 // Analytic distance only. A generic point-to-surface projection can spin forever on a cone.
 double distanceToSurface(const TopoDS_Face &face, const gp_Pnt &world) {
     BRepAdaptor_Surface s(face);
@@ -632,8 +621,11 @@ TopoDS_Face faceOn(const QList<TopoDS_Face> &faces, const gp_Pnt &world) {
 
 // A round chamfer is a cone between two faces. Pulling it changes those two legs, and a pull
 // that reaches the corner takes the chamfer off.
+// notChamfer is set when a face is a cone that does not run between two walls (a taper, a countersink):
+// those are offset like any other face.
 bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamfers, double distance,
-                      TopoDS_Shape &out, QString &error) {
+                      TopoDS_Shape &out, QString &error, bool &notChamfer) {
+    notChamfer = false;
     struct Job {
         QList<TopoDS_Face> faces;   // both halves when the cone is split on a seam
         QList<TopoDS_Face> sideA;   // one wall, including seam-split halves
@@ -677,6 +669,7 @@ bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamf
         if (listed(claimed, chamfer)) continue;
         if (BRepAdaptor_Surface(chamfer).GetType() != GeomAbs_Cone) {
             error = QStringLiteral("Only a round chamfer can be pulled this way");
+            notChamfer = true;
             return false;
         }
         // A circular chamfer is often two cone faces meeting at a seam. Pull both.
@@ -725,6 +718,7 @@ bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamf
         if (groups.size() < 2 || groups[1].length < 0.2
             || (groups.size() > 2 && groups[2].length > groups[1].length * 0.5)) {
             error = QStringLiteral("This face is not a single chamfer");
+            notChamfer = true;
             return false;
         }
         Job job;
@@ -746,6 +740,7 @@ bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamf
         }
         if (job.legA < 0 || job.legB < 0) {
             error = QStringLiteral("Could not measure this chamfer");
+            notChamfer = true;
             return false;
         }
         const auto shrink = [&](const QList<TopoDS_Face> &side, const TopoDS_Face &cone, const gp_Pnt &at, double leg) {
@@ -775,7 +770,7 @@ bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamf
     for (const Job &job : jobs)
         for (const TopoDS_Face &face : job.faces) defeat.AddFaceToRemove(face);
     defeat.SetToFillHistory(Standard_False);
-    Handle(StepTimeLimit) limit = new StepTimeLimit(2000);
+    Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(2000);
     defeat.Build(limit->Start());
     if (limit->expired() || !defeat.IsDone() || defeat.Shape().IsNull()) {
         error = QStringLiteral("Could not pull this chamfer");
@@ -828,65 +823,146 @@ bool pullChamferFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &chamf
     return !GeomUtils::solids(out).isEmpty();
 }
 
+// A copy of a solid with the given faces found on the copy, for work in a worker thread that may outlive
+// the feature
+struct CopiedFaces {
+    TopoDS_Shape solid;
+    QList<TopoDS_Face> faces;
+};
+CopiedFaces copyWithFaces(const TopoDS_Shape &solid, const QList<TopoDS_Face> &faces) {
+    CopiedFaces c;
+    c.solid = GeomUtils::copyWithFaces(solid, faces, c.faces);
+    return c;
+}
+
+// The material between a face of `solid` and the same face moved `distance` along its outward normal: a prism
+// for a flat face, the face thickened for a curved one. Null when OCCT cannot build it.
+TopoDS_Shape faceSlab(const TopoDS_Shape &solid, const TopoDS_Face &f, double distance) {
+    if (BRepAdaptor_Surface(f, Standard_False).GetType() == GeomAbs_Plane)
+        return prism(f, gp_Vec(outwardNormal(f)) * distance);
+    const auto thicken = [&f](double d) -> TopoDS_Shape {
+        BRepOffsetAPI_MakeThickSolid thick;
+        thick.MakeThickSolidBySimple(f, d);
+        if (!thick.IsDone() || GeomUtils::solids(thick.Shape()).isEmpty()) return {};
+        // The thickened cones of the spool hub came out inside out (negative volume), which no boolean can use
+        QList<TopoDS_Shape> parts;
+        for (const TopoDS_Shape &part : GeomUtils::solids(thick.Shape())) {
+            TopoDS_Solid solid = TopoDS::Solid(part);
+            BRepLib::OrientClosedSolid(solid);
+            parts << solid;
+        }
+        return GeomUtils::makeCompound(parts);
+    };
+    const TopoDS_Shape slab = thicken(distance);
+    if (slab.IsNull()) return {};
+    // A pushed-out slab lies outside the solid, a pulled-in one inside; the thickening may go the other way
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(slab, props);
+    BRepClass3d_SolidClassifier where(solid, props.CentreOfMass(), 1e-7);
+    const bool inside = where.State() == TopAbs_IN;
+    return inside == (distance < 0) ? slab : thicken(-distance);
+}
+
+// OCCT's offset either finishes within a second or two or runs for half a minute (spool hub), so it gets less
+constexpr qint64 kOccOffsetMs = 3000;
+constexpr qint64 kOffsetFaceMs = 6000;   // the slab fallback
+
 bool offsetFacesOnSolid(const TopoDS_Shape &solid, const QList<TopoDS_Face> &faces, double distance,
                         TopoDS_Shape &out, QString &error) {
     if (faces.isEmpty()) { error = QStringLiteral("Select one or more faces"); return false; }
     if (std::fabs(distance) < 1e-9) { out = solid; return true; }
     const double v0 = GeomUtils::volume(solid);
+    double area = 0;
+    for (const TopoDS_Face &f : faces) area += GeomUtils::area(f);
+    // The volume moved the right way, and (for the slab fallback) by roughly the faces' area times the distance
+    const auto plausible = [v0, area, distance](const TopoDS_Shape &s, bool sized) {
+        if (s.IsNull() || GeomUtils::solids(s).isEmpty()) return false;
+        const double dv = GeomUtils::volume(s) - v0;
+        if (!(distance > 0 ? dv > 1e-6 : dv < -1e-6)) return false;
+        const double expected = area * std::fabs(distance);
+        return !sized || (std::fabs(dv) > expected * 0.2 && std::fabs(dv) < expected * 3 + 1e-6);
+    };
 
-    bool cones = !faces.isEmpty();
-    for (const TopoDS_Face &f : faces)
-        if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Cone) cones = false;
-
-    // A cone chamfer is pulled by rebuilding that face. Offsetting the whole solid here
-    // walks every face and will lock the window on a part like the spool hub.
-    if (!cones) {
-    try {
-        BRepOffset_MakeOffset mo;
-        mo.Initialize(solid, 0.0, 1e-5, BRepOffset_Skin, Standard_True, Standard_False, GeomAbs_Intersection);
-            for (const TopoDS_Face &f : faces) mo.SetOffsetOnFace(f, distance);
-            Handle(StepTimeLimit) limit = new StepTimeLimit(2000);
-            mo.MakeOffsetShape(limit->Start());
-            if (!limit->expired() && mo.IsDone() && !GeomUtils::solids(mo.Shape()).isEmpty()
-                && BRepCheck_Analyzer(mo.Shape()).IsValid()) {
-            const double v1 = GeomUtils::volume(mo.Shape());
-                if (distance > 0 ? v1 > v0 + 1e-6 : v1 < v0 - 1e-6) {
-                    out = mo.Shape();
-                    return true;
-                }
-        }
-    } catch (const Standard_Failure &) {
+    // A round chamfer is pulled by rebuilding it between its two walls. Other cones (a taper, a
+    // countersink) are offset like any other face below.
+    const bool cones = std::all_of(faces.begin(), faces.end(),
+                                   [](const TopoDS_Face &f) { return BRepAdaptor_Surface(f).GetType() == GeomAbs_Cone; });
+    if (cones) {
+        bool notChamfer = false;
+        bool pulled = false;
+        try {
+            pulled = pullChamferFaces(solid, faces, distance, out, error, notChamfer);
         } catch (...) {
+            error = QStringLiteral("Could not pull this chamfer");
+        }
+        if (pulled && !GeomUtils::solids(out).isEmpty() && std::isfinite(GeomUtils::volume(out))
+            && (GeomUtils::faceMap(out).Extent() > 200 || BRepCheck_Analyzer(out).IsValid()))
+            return true;
+        // A chamfer that cannot be rebuilt (a frustum between two flats looks like one) is still offset
+        // like any other face; its own message is kept in case that fails too
+        if (notChamfer) error.clear();
+    }
+
+    // OCCT's offset with only these faces moved. It walks every face of the solid and has locked the window
+    // on the spool hub, so it runs on a copy in a worker thread with a hard limit.
+    {
+        const CopiedFaces c = copyWithFaces(solid, faces);
+        auto result = std::make_shared<TopoDS_Shape>();
+        const bool finished = GeomUtils::runWithTimeLimit(kOccOffsetMs, [c, distance, plausible, result] {
+            BRepOffset_MakeOffset mo;
+            mo.Initialize(c.solid, 0.0, 1e-5, BRepOffset_Skin, Standard_True, Standard_False, GeomAbs_Intersection);
+            for (const TopoDS_Face &f : c.faces) mo.SetOffsetOnFace(f, distance);
+            Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(kOccOffsetMs);
+            mo.MakeOffsetShape(limit->Start());
+            if (!limit->expired() && mo.IsDone() && plausible(mo.Shape(), false) && BRepCheck_Analyzer(mo.Shape()).IsValid())
+                *result = mo.Shape();
+        });
+        if (finished && !result->IsNull()) {
+            out = *result;
+            return true;
         }
     }
 
-    bool pulled = false;
-    try {
-        pulled = cones && pullChamferFaces(solid, faces, distance, out, error);
-    } catch (const Standard_Failure &) {
-        error = QStringLiteral("Could not pull this chamfer");
-    } catch (...) {
-        error = QStringLiteral("Could not pull this chamfer");
-    }
-    if (pulled && !GeomUtils::solids(out).isEmpty() && std::isfinite(GeomUtils::volume(out))
-        && (GeomUtils::faceMap(out).Extent() > 200 || BRepCheck_Analyzer(out).IsValid()))
-        return true;
-
-        TopoDS_Shape r = solid;
-        for (const TopoDS_Face &f : faces) {
-        if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane) {
-            if (error.isEmpty()) error = QStringLiteral("Could not pull this face");
-            return false;
+    // Replace-face fallback: add (or take away) the slab between each face and its moved copy. The sides of a
+    // slab run along the face normals, which is exact where the neighbouring faces meet the face square.
+    const CopiedFaces c = copyWithFaces(solid, faces);
+    struct Result {
+        TopoDS_Shape shape;
+        QString error;
+    };
+    auto result = std::make_shared<Result>();
+    const bool finished = GeomUtils::runWithTimeLimit(kOffsetFaceMs, [c, distance, plausible, result] {
+        TopoDS_Shape r = c.solid;
+        for (const TopoDS_Face &f : c.faces) {
+            const TopoDS_Shape slab = faceSlab(c.solid, f, distance);
+            if (slab.IsNull()) {
+                result->error = QStringLiteral("Could not offset this face");
+                return;
+            }
+            r = distance > 0 ? fuse(r, slab) : cut(r, slab);
+            if (r.IsNull()) {
+                result->error = QStringLiteral("Offset Face failed");
+                return;
+            }
         }
-            const gp_Vec n(outwardNormal(f));
-        const TopoDS_Shape p = prism(f, n * distance);
-        if (p.IsNull()) { error = QStringLiteral("Offset Face failed"); return false; }
-        r = distance > 0 ? fuse(r, p) : cut(r, p);
-        if (r.IsNull()) { error = QStringLiteral("Offset Face failed"); return false; }
+        r = GeomUtils::unify(r);
+        if (!plausible(r, true)) {
+            result->error = QStringLiteral("Offset Face failed (the distance may be too large for this face)");
+            return;
+        }
+        result->shape = r;
+    });
+    if (!finished) {
+        error = QStringLiteral("Offset Face took longer than 9 s and was stopped");
+        return false;
     }
-    out = GeomUtils::unify(r);
+    if (result->shape.IsNull()) {
+        if (error.isEmpty()) error = result->error.isEmpty() ? QStringLiteral("Could not pull this face") : result->error;
+        return false;
+    }
+    out = result->shape;
     error.clear();
-    return !out.IsNull();
+    return true;
 }
 
 bool FissionOffsetFace::compute(RebuildContext &ctx) {
@@ -982,53 +1058,77 @@ bool FissionDeleteFace::compute(RebuildContext &ctx) {
         // OCCT's defeaturing only checks for cancel between its stages, and on helical (thread) faces one
         // stage ran for minutes. It works on a copy in a worker thread; after kDeleteFaceMs the feature gives
         // up and the worker finishes on its own copy in the background.
-        BRepBuilderAPI_Copy copier(shape);
-        const TopoDS_Shape copy = copier.Shape();
+        QList<TopoDS_Face> onCopy;
+        const TopoDS_Shape copy = GeomUtils::copyWithFaces(shape, it.value(), onCopy);
         TopTools_ListOfShape faces;
-        for (const TopoDS_Face &f : it.value()) {
-            const TopTools_ListOfShape &m = copier.Modified(f);
-            faces.Append(m.IsEmpty() ? TopoDS_Shape(f) : m.First());
-        }
-        struct Job {
-            std::mutex mutex;
-            std::condition_variable cv;
-            bool done = false;
+        for (const TopoDS_Face &f : onCopy) faces.Append(f);
+        struct Result {
             TopoDS_Shape out;
             QString error;
         };
-        auto job = std::make_shared<Job>();
-        std::thread([job, copy, faces] {
-            TopoDS_Shape out;
-            QString error;
+        auto job = std::make_shared<Result>();
+        const bool finished = GeomUtils::runWithTimeLimit(kDeleteFaceMs, [job, copy, faces] {
             try {
                 BRepAlgoAPI_Defeaturing defeat;
                 defeat.SetShape(copy);
                 for (TopTools_ListOfShape::Iterator f(faces); f.More(); f.Next()) defeat.AddFaceToRemove(f.Value());
                 defeat.SetToFillHistory(Standard_False);
                 defeat.SetRunParallel(Standard_True);
-                defeat.Build();
+                // Asked to stop too, so a worker the feature gave up on does not keep a core busy for minutes
+                Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(kDeleteFaceMs);
+                defeat.Build(limit->Start());
                 if (!defeat.IsDone() || defeat.Shape().IsNull() || GeomUtils::solids(defeat.Shape()).isEmpty())
-                    error = QStringLiteral("The faces around it cannot close the gap, so this face cannot be deleted");
+                    job->error = QStringLiteral("The faces around it cannot close the gap, so this face cannot be deleted");
                 else if (!BRepCheck_Analyzer(defeat.Shape()).IsValid())
-                    error = QStringLiteral("Deleting this face leaves an invalid solid");
+                    job->error = QStringLiteral("Deleting this face leaves an invalid solid");
                 else
-                    out = defeat.Shape();
+                    job->out = defeat.Shape();
             } catch (...) {
-                error = QStringLiteral("Delete Face failed in the geometry kernel");
+                job->error = QStringLiteral("Delete Face failed in the geometry kernel");
             }
-            std::lock_guard<std::mutex> lock(job->mutex);
-            job->out = out;
-            job->error = error;
-            job->done = true;
-            job->cv.notify_all();
-        }).detach();
-        std::unique_lock<std::mutex> lock(job->mutex);
-        if (!job->cv.wait_for(lock, std::chrono::milliseconds(kDeleteFaceMs), [&] { return job->done; }))
+        });
+        if (!finished)
             return fail("Delete Face took longer than 15 s and was stopped (OCCT cannot heal these faces quickly)");
         if (!job->error.isEmpty()) return fail(job->error);
         replaceBody(ctx, it.key(), job->out, id());
     }
     return true;
+}
+
+// Draft of one flat face without OCCT's draft: the face's plane is turned by `rad` about the line where it
+// meets the neutral plane, so that it leans towards the pull, and the body is cut or filled to the turned
+// plane over the face's own outline (as Replace Face does). OCCT's draft has to re-intersect the turned face
+// with every neighbour and fails on imported bodies whose side faces meet chamfers and blends; here the
+// neighbours only grow or shrink by the thin wedge.
+TopoDS_Shape draftFlatFace(const TopoDS_Shape &solid, const TopoDS_Face &f, const gp_Dir &pull, const gp_Pln &neutral,
+                      double rad) {
+    const BRepAdaptor_Surface surface(f, Standard_False);
+    if (surface.GetType() != GeomAbs_Plane || std::fabs(rad) < 1e-9) return {};
+    const gp_Dir n = outwardNormal(f);
+    IntAna_QuadQuadGeo meet(surface.Plane(), neutral, 1e-9, 1e-9);
+    if (!meet.IsDone() || meet.TypeInter() != IntAna_Line || meet.NbSolutions() < 1) return {};
+    const gp_Lin hinge = meet.Line(1);
+    // Turn so the face leans towards the pull: its normal gains a component along the pull
+    gp_Dir turned = n.Rotated(hinge.Position(), rad);
+    if (n.Rotated(hinge.Position(), -rad).Dot(pull) > turned.Dot(pull)) turned = n.Rotated(hinge.Position(), -rad);
+    // How far the turned plane gets from the face: the band the wedge lives in
+    double reach = 0;
+    for (TopExp_Explorer v(f, TopAbs_VERTEX); v.More(); v.Next())
+        reach = std::max(reach, hinge.Distance(BRep_Tool::Pnt(TopoDS::Vertex(v.Current()))));
+    const double depth = reach * std::tan(std::fabs(rad)) * 1.5 + 0.05;
+    // The cutting plane is centred on the face: the hinge line's own origin can be far away
+    const gp_Pnt c = GeomUtils::faceCentroid(f);
+    const gp_Pnt mid = hinge.Location().Translated(gp_Vec(hinge.Direction()) * gp_Vec(hinge.Location(), c).Dot(gp_Vec(hinge.Direction())));
+    const gp_Ax3 plane(mid, turned);
+    const TopoDS_Shape beyond = halfSpace(plane, (reach + depth) * 4 + 1);
+    const TopoDS_Shape grow = cut(prism(f, gp_Vec(n) * depth), beyond);
+    const TopoDS_Shape column = prism(translated(f, gp_Vec(n) * -depth), gp_Vec(n) * (2 * depth));
+    const TopoDS_Shape trim = column.IsNull() ? TopoDS_Shape() : common(column, beyond);
+    if (grow.IsNull() || trim.IsNull()) return {};
+    const TopoDS_Shape grown = fuse(solid, grow);
+    const TopoDS_Shape r = grown.IsNull() ? TopoDS_Shape() : cut(grown, trim);
+    if (r.IsNull() || GeomUtils::solids(r).isEmpty()) return {};
+    return GeomUtils::unify(r);
 }
 
 bool FissionDraft::compute(RebuildContext &ctx) {
@@ -1045,17 +1145,56 @@ bool FissionDraft::compute(RebuildContext &ctx) {
     if (flag("flip")) dir.Reverse();
     const gp_Pln neutral(ax.Location(), ax.Direction());
 
+    // Flat faces OCCT cannot draft are turned one by one (draftFlatFace); each turned face is found again on
+    // the new body by its centre, since the booleans renumber the faces
+    auto tiltFaces = [&](const TopoDS_Shape &shape, const QList<TopoDS_Face> &which, const gp_Dir &pull,
+                         TopoDS_Shape &out) -> bool {
+        TopoDS_Shape r = shape;
+        for (const TopoDS_Face &f : which) {
+            const gp_Pnt c = GeomUtils::faceCentroid(f);
+            TopoDS_Face now;
+            double best = 1e-3;
+            for (TopExp_Explorer e(r, TopAbs_FACE); e.More(); e.Next()) {
+                const TopoDS_Face cand = TopoDS::Face(e.Current());
+                if (BRepAdaptor_Surface(cand, Standard_False).GetType() != GeomAbs_Plane) continue;
+                const double d = BRepAdaptor_Surface(cand, Standard_False).Plane().Distance(c);
+                if (d < best && outwardNormal(cand).IsParallel(outwardNormal(f), 1e-6)
+                    && outwardNormal(cand).Dot(outwardNormal(f)) > 0) {
+                    best = d;
+                    now = cand;
+                }
+            }
+            if (now.IsNull()) return false;
+            r = draftFlatFace(r, now, pull, neutral, rad);
+            if (r.IsNull()) return false;
+        }
+        if (!BRepCheck_Analyzer(r).IsValid()) return false;
+        out = r;
+        return true;
+    };
     auto draftFaces = [&](const TopoDS_Shape &shape, const QList<TopoDS_Face> &which, const gp_Dir &pull,
                           TopoDS_Shape &out) -> bool {
-        BRepOffsetAPI_DraftAngle dr(shape);
-        for (const TopoDS_Face &f : which) {
-            dr.Add(f, pull, rad, neutral);
-            if (!dr.AddDone()) { err = "Draft cannot be applied to one of the faces (is it parallel to the pull direction?)"; return false; }
+        bool flat = true;
+        for (const TopoDS_Face &f : which)
+            if (BRepAdaptor_Surface(f, Standard_False).GetType() != GeomAbs_Plane) flat = false;
+        try {
+            BRepOffsetAPI_DraftAngle dr(shape);
+            for (const TopoDS_Face &f : which) {
+                dr.Add(f, pull, rad, neutral);
+                if (!dr.AddDone()) {
+                    err = "Draft cannot be applied to one of the faces (is it parallel to the pull direction?)";
+                    return flat && tiltFaces(shape, which, pull, out);
+                }
+            }
+            dr.Build();
+            if (dr.IsDone() && !GeomUtils::solids(dr.Shape()).isEmpty()) {
+                out = dr.Shape();
+                return true;
+            }
+        } catch (const Standard_Failure &) {
         }
-        dr.Build();
-        if (!dr.IsDone()) { err = "Draft failed"; return false; }
-        out = dr.Shape();
-        return true;
+        err = "Draft failed";
+        return flat && tiltFaces(shape, which, pull, out);
     };
 
     TopoDS_Shape result;

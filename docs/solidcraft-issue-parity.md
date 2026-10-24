@@ -20,7 +20,7 @@ Many SolidCraft bugs are kernel-specific (`not supported yet: …` from truck). 
 
 Also related (already covered elsewhere in SelfTest): open-top Shell, hip-roof Shell (1.13.31), 45° face-extrude frustum shell with no tiny corner faces (1.13.33–1.13.34), combine cut/intersect, loft square frustum, patterns, draft, hole through-all.
 
-Shell behaviour as of **1.13.35**: planar bodies try OCCT Intersection joins first; a result must pass `BRepCheck` and must not contain faces under 0.01 mm². If thick-solid fails, the punch fallback offsets the solid, grows each opening face in-plane, cuts, and sews. A punch result that passes `BRepCheck` is kept, including the taper-plus-fillet shell whose wall equals the fillet radius. Loft rail guide passes (volume 7000). Local `--selftest` on this tree (1.13.40): 440 passed, 0 failed. The GitHub release asset is v1.13.35.
+Shell behaviour as of **1.13.35**: planar bodies try OCCT Intersection joins first; a result must pass `BRepCheck` and must not contain faces under 0.01 mm². If thick-solid fails, the punch fallback offsets the solid, grows each opening face in-plane, cuts, and sews. A punch result that passes `BRepCheck` is kept, including the taper-plus-fillet shell whose wall equals the fillet radius. Loft rail guide passes (volume 7000). Since 1.13.41 every offset and shell is checked against wall area × thickness, curved bodies give each thick-solid try at most 3 s in a worker, and the punch first removes the wall over the cavity (see `FISSION_360_PROJECT.md`, "Imported bodies and solid tools"). Local `--selftest` on this tree (1.13.41): 450 passed, 0 failed. The GitHub release asset is v1.13.35.
 
 ## Reviewed, not encoded as geometry recipes (yet)
 

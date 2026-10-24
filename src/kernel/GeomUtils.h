@@ -10,6 +10,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_Ax3.hxx>
 #include <Bnd_Box.hxx>
+#include <functional>
 
 namespace GeomUtils {
 
@@ -48,5 +49,15 @@ QList<TopoDS_Shape> solids(const TopoDS_Shape &shape);
 TopoDS_Shape makeCompound(const QList<TopoDS_Shape> &shapes);
 
 gp_Ax3 standardPlane(const QString &name, bool *ok = nullptr);
+
+// A copy of `shape` (geometry too), with `faces` of it found again on the copy as they sit in it, orientation
+// included: BRepBuilderAPI_Copy::Modified gives the face without the orientation it has in the solid, so its
+// normal can point inwards
+TopoDS_Shape copyWithFaces(const TopoDS_Shape &shape, const QList<TopoDS_Face> &faces, QList<TopoDS_Face> &onCopy);
+
+// Runs `work` on a worker thread and waits at most `ms` (pair it with TimeLimit from TimeLimit.h). False on a
+// timeout: the worker then finishes on its own in the background, so `work` may only touch what it owns
+// (copies of shapes, shared_ptr results).
+bool runWithTimeLimit(qint64 ms, std::function<void()> work);
 
 }

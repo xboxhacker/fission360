@@ -4,6 +4,7 @@
 #include "FissionDocument.h"
 #include "FissionSketch.h"
 #include "GeomUtils.h"
+#include "TimeLimit.h"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -14,6 +15,7 @@
 #include <QVector3D>
 #include <optional>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -25,7 +27,9 @@
 #include <Geom2d_Line.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <gp_Cylinder.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <cmath>
+#include <memory>
 
 namespace ThreadUtils {
 
@@ -393,6 +397,8 @@ bool FissionHole::compute(RebuildContext &ctx) {
     return true;
 }
 
+constexpr qint64 kThreadMs = 15000;
+
 bool FissionThread::compute(RebuildContext &ctx) {
     QString err;
     if (get("face").typeId() != QMetaType::QVariantMap) return fail("Select a cylindrical face");
@@ -445,12 +451,40 @@ bool FissionThread::compute(RebuildContext &ctx) {
 
     const gp_Ax3 pos = cyl.Position();
     const gp_Ax3 start(pos.Location().Translated(gp_Vec(pos.Direction()) * (v0 + offset)), pos.Direction(), pos.XDirection());
-    const TopoDS_Shape tool = ThreadUtils::threadTool(start, R, length, pitch, internal);
-    if (tool.IsNull()) return fail("Could not build the thread");
-    BRepAlgoAPI_Cut cut(ctx.bodies[body].shape, tool);
-    if (!cut.IsDone() || cut.HasErrors()) return fail("Thread failed");
-    const QList<TopoDS_Shape> parts = GeomUtils::solids(cut.Shape());
-    if (parts.isEmpty()) return fail("Thread failed");
-    ctx.bodies[body].shape = parts.first();
+    // Cutting the helix out of a body that already has helical faces (McMaster threaded rod) took about 50 s.
+    // The cut runs on a copy in a worker thread; after kThreadMs the feature gives up and the worker stops
+    // at OCCT's next progress check.
+    struct Result {
+        TopoDS_Shape shape;
+        QString error;
+    };
+    auto result = std::make_shared<Result>();
+    const TopoDS_Shape copy = BRepBuilderAPI_Copy(ctx.bodies[body].shape).Shape();
+    const bool finished = GeomUtils::runWithTimeLimit(kThreadMs, [result, copy, start, R, length, pitch, internal] {
+        Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(kThreadMs);
+        const TopoDS_Shape tool = ThreadUtils::threadTool(start, R, length, pitch, internal);
+        if (tool.IsNull()) {
+            result->error = QStringLiteral("Could not build the thread");
+            return;
+        }
+        TopTools_ListOfShape args, tools;
+        args.Append(copy);
+        tools.Append(tool);
+        BRepAlgoAPI_Cut cut;
+        cut.SetArguments(args);
+        cut.SetTools(tools);
+        // Oriented boxes skip most of the existing helical faces of an already threaded part, and the
+        // intersections of the rest run in parallel
+        cut.SetUseOBB(Standard_True);
+        cut.SetRunParallel(Standard_True);
+        cut.Build(limit->Start());
+        const QList<TopoDS_Shape> parts =
+            cut.IsDone() && !cut.HasErrors() && !limit->expired() ? GeomUtils::solids(cut.Shape()) : QList<TopoDS_Shape>();
+        if (parts.isEmpty()) result->error = QStringLiteral("Thread failed");
+        else result->shape = parts.first();
+    });
+    if (!finished) return fail("Modeled thread took longer than 15 s and was stopped (turn off Modeled for a cosmetic thread)");
+    if (!result->error.isEmpty()) return fail(result->error);
+    ctx.bodies[body].shape = result->shape;
     return true;
 }

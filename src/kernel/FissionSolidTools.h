@@ -5,11 +5,19 @@
 #include "FissionTransform.h"
 #include <QList>
 #include <TopoDS_Face.hxx>
+#include <gp_Pln.hxx>
 
 // Move `faces` of `solid` by `distance` along their outward normals. A round chamfer is pulled
-// (its size changes, or it comes off) instead of being rejected as a non-flat face.
+// (its size changes, or it comes off). Other faces, flat or curved, are offset by OCCT, or else the slab
+// between the face and its moved copy is added or cut. Each step has a time limit.
 bool offsetFacesOnSolid(const TopoDS_Shape &solid, const QList<TopoDS_Face> &faces, double distance,
                         TopoDS_Shape &out, QString &error);
+
+// Draft of one flat face by turning its plane about the line where it meets `neutral` until it leans `rad`
+// towards `pull`, then cutting or filling the body to it over the face's outline. Draft falls back to this
+// where OCCT's draft fails. Null when it cannot be done.
+TopoDS_Shape draftFlatFace(const TopoDS_Shape &solid, const TopoDS_Face &face, const gp_Dir &pull, const gp_Pln &neutral,
+                           double rad);
 
 // MODIFY tools that work on existing bodies. Body inputs are body indices; face inputs are face refs
 // (see RebuildContext). Plane inputs take any plane ref accepted by RebuildContext::resolvePlane.

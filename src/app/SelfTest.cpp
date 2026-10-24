@@ -15,6 +15,7 @@
 #include "kernel/FissionMeshFeatures.h"
 #include "kernel/FissionProgress.h"
 #include "kernel/FissionSketch.h"
+#include "kernel/FissionSolidTools.h"
 #include "kernel/GeomUtils.h"
 #include "kernel/MeshUtils.h"
 #include "kernel/DocumentVersionStore.h"
@@ -76,9 +77,12 @@
 #include <GProp_GProps.hxx>
 #include <TopoDS.hxx>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <memory>
+#include <thread>
 
 namespace {
 
@@ -3485,6 +3489,142 @@ void testSolidCraftParity() {
     }
 }
 
+// Solid tools on curved, chamfered bodies like imported parts (the --toolbench failures on the 4KG Spool Hub),
+// and the time limits that keep slow OCCT steps from freezing the window
+void testCurvedBodyTools() {
+    {
+        auto value = std::make_shared<int>(0);
+        const bool quick = GeomUtils::runWithTimeLimit(5000, [value] { *value = 7; });
+        check(quick && *value == 7, "time limit: quick work finishes with its result");
+        QElapsedTimer t;
+        t.start();
+        const bool slow = GeomUtils::runWithTimeLimit(100, [] { std::this_thread::sleep_for(std::chrono::milliseconds(800)); });
+        check(!slow && t.elapsed() < 600, "time limit: slow work is given up after the limit",
+              QString("%1 ms").arg(t.elapsed()));
+    }
+    // Draft fallback: the turned-plane draft matches OCCT's draft where OCCT works
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        const TopoDS_Shape plain = doc.body(0)->shape();
+        const auto side = [](const gp_Pnt &p) { return near(p.X(), 10, 1e-6); };
+        const TopoDS_Face face = TopoDS::Face(GeomUtils::faceMap(plain)(findFace(&doc, 0, side) + 1));
+        auto *dr = doc.addFeature("Draft", {{"faces", QVariantList{faceAt(&doc, 0, side)}}, {"plane", "XY"}, {"angle", "10 deg"}});
+        const double occt = totalVolume(&doc);
+        doc.removeFeature(dr);
+        const gp_Pln bottom(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+        const TopoDS_Shape turned = draftFlatFace(plain, face, gp_Dir(0, 0, 1), bottom, 10 * M_PI / 180);
+        check(dr && !turned.IsNull() && BRepCheck_Analyzer(turned).IsValid() && near(GeomUtils::volume(turned), occt, 1e-4),
+              "draft fallback: a turned side face matches OCCT's draft",
+              QString("occt %1, turned %2").arg(occt).arg(turned.IsNull() ? -1 : GeomUtils::volume(turned)));
+        const gp_Pln middle(gp_Pnt(0, 0, 5), gp_Dir(0, 0, 1));
+        const TopoDS_Shape hinged = draftFlatFace(plain, face, gp_Dir(0, 0, 1), middle, 10 * M_PI / 180);
+        check(!hinged.IsNull() && BRepCheck_Analyzer(hinged).IsValid() && near(GeomUtils::volume(hinged), 1000, 1e-4)
+                  && GeomUtils::boundingBox(hinged).CornerMax().X() > 10.5,
+              "draft fallback: neutral plane across the face turns it about the middle",
+              QString("volume %1").arg(hinged.IsNull() ? -1 : GeomUtils::volume(hinged)));
+    }
+    // Draft of a flat side face whose neighbours are chamfers, as on imported parts
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 20, 10, 10);
+        doc.addFeature("Chamfer", {{"edges", QVariantList{edgeAt(&doc, 0, [](const gp_Pnt &p) {
+                                       return near(p.X(), 20, 1e-6) && near(p.Y(), 0, 1e-6);
+                                   }), edgeAt(&doc, 0, [](const gp_Pnt &p) {
+                                       return near(p.X(), 20, 1e-6) && near(p.Y(), 10, 1e-6);
+                                   })}},
+                                   {"distance", "1 mm"}});
+        const double before = totalVolume(&doc);
+        auto *dr = doc.addFeature("Draft", {{"faces", QVariantList{faceAt(&doc, 0, [](const gp_Pnt &p) { return near(p.X(), 20, 1e-6); })}},
+                                            {"plane", "XY"},
+                                            {"angle", "2 deg"}});
+        check(dr->isHealthy() && doc.bodyCount() == 1 && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid()
+                  && std::fabs(totalVolume(&doc) - before) > 0.5,
+              "draft: flat side face between two chamfers", status(&doc));
+    }
+    // Offset Face on curved faces that are not chamfers
+    {
+        FissionDocument doc;
+        auto *c = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        c->addCircle(0, 0, 10);
+        doc.rebuild();
+        extrude(&doc, c, "20 mm");
+        const auto wall = [](const gp_Pnt &p) { return near(p.Z(), 10, 1e-6); };
+        auto *of = doc.addFeature("OffsetFace", {{"faces", QVariantList{faceAt(&doc, 0, wall)}}, {"distance", "0.5 mm"}});
+        check(of->isHealthy() && near(totalVolume(&doc), M_PI * 10.5 * 10.5 * 20, 2e-3),
+              "offset face: cylinder side pushed out 0.5 mm", status(&doc));
+        doc.removeFeature(of);
+
+        // A cone that runs the whole height (a tapered pin) is not a chamfer between two walls
+        FissionDocument pin;
+        auto *p = qobject_cast<FissionSketch *>(pin.addFeature("Sketch", {{"plane", "XZ"}}));
+        p->addPolyline({QVariantList{0, 0}, QVariantList{10, 0}, QVariantList{6, 20}, QVariantList{0, 20}}, true);
+        pin.rebuild();
+        pin.addFeature("Revolve", {{"sketch", p->id()}, {"axis", "Z"}});
+        const double cone = totalVolume(&pin);
+        const auto taper = [](const gp_Pnt &q) { return q.Z() > 1 && q.Z() < 19; };   // its centre is on the axis
+        auto *grow = pin.addFeature("OffsetFace", {{"faces", QVariantList{faceAt(&pin, 0, taper)}}, {"distance", "0.3 mm"}});
+        const double grown = totalVolume(&pin);
+        // side area π (10 + 6) √(4² + 20²) ≈ 1025 mm², times 0.3 mm
+        check(grow->isHealthy() && grown > cone + 250 && grown < cone + 370 && BRepCheck_Analyzer(pin.body(0)->shape()).IsValid(),
+              "offset face: tapered pin face (a cone that is no chamfer) pushed out",
+              QString("%1 -> %2 %3").arg(cone).arg(grown).arg(status(&pin)));
+    }
+    // Shell with a curved opening: a half cylinder opened on its round face is a D-shaped tray
+    {
+        FissionDocument doc;
+        auto *c = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        c->addCircle(0, 0, 10);
+        doc.rebuild();
+        extrude(&doc, c, "20 mm");
+        box(&doc, -20, -20, 20, 40, 20, "cut");
+        const auto round = [](const gp_Pnt &p) { return p.X() > 1 && near(p.Z(), 10, 1e-3); };
+        QElapsedTimer t;
+        t.start();
+        auto *sh = doc.addFeature("Shell", {{"faces", QVariantList{faceAt(&doc, 0, round)}}, {"thickness", "1 mm"}});
+        const double tray = 18 * 2 * std::sqrt(99.75) + M_PI * 100;   // back plate + two half-disc ends
+        check(sh->isHealthy() && doc.bodyCount() == 1 && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid()
+                  && near(totalVolume(&doc), tray, 0.1),
+              "shell: half cylinder open on its round face", QString("%1 ms, expected %2, %3").arg(t.elapsed()).arg(tray).arg(status(&doc)));
+    }
+    // Shell on a revolved hub with chamfers and slots, 0.3 mm walls (the Spool Hub case)
+    {
+        FissionDocument doc;
+        auto *p = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XZ"}}));
+        p->addPolyline({QVariantList{5, 0}, QVariantList{20, 0}, QVariantList{20, 4}, QVariantList{8, 4}, QVariantList{8, 12},
+                        QVariantList{5, 12}},
+                       true);
+        doc.rebuild();
+        doc.addFeature("Revolve", {{"sketch", p->id()}, {"axis", "Z"}});
+        doc.addFeature("Chamfer", {{"edges", QVariantList{edgeAt(&doc, 0, [](const gp_Pnt &q) {
+                                       return near(q.Z(), 4, 1e-6) && near(std::hypot(q.X(), q.Y()), 20, 1e-4);
+                                   })}},
+                                   {"distance", "1 mm"}});
+        auto *slotSketch = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        slotSketch->addRectangle(12, -1.5, 5, 3);
+        slotSketch->addRectangle(-17, -1.5, 5, 3);
+        doc.rebuild();
+        extrude(&doc, slotSketch, "4 mm", "cut");
+        const double hub = totalVolume(&doc);
+        const auto top = [](const gp_Pnt &q) { return near(q.Z(), 12, 1e-6); };
+        QElapsedTimer t;
+        t.start();
+        auto *sh = doc.addFeature("Shell", {{"faces", QVariantList{faceAt(&doc, 0, top)}}, {"thickness", "0.3 mm"}});
+        const qint64 ms = t.elapsed();
+        check(sh->isHealthy() && doc.bodyCount() == 1 && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid()
+                  && totalVolume(&doc) < hub * 0.5 && totalVolume(&doc) > hub * 0.05 && ms < 16000,
+              "shell: chamfered, slotted hub open at the top, 0.3 mm walls",
+              QString("%1 ms, %2 -> %3 %4").arg(ms).arg(hub).arg(totalVolume(&doc)).arg(status(&doc)));
+        doc.removeFeature(sh);
+        t.start();
+        auto *hollow = doc.addFeature("Shell", {{"faces", QVariantList{}}, {"body", 0}, {"thickness", "0.3 mm"}});
+        check(hollow->isHealthy() && BRepCheck_Analyzer(doc.body(0)->shape()).IsValid() && totalVolume(&doc) < hub * 0.5
+                  && t.elapsed() < 16000,
+              "shell: the same hub hollowed with 0.3 mm walls",
+              QString("%1 ms, %2 -> %3 %4").arg(t.elapsed()).arg(hub).arg(totalVolume(&doc)).arg(status(&doc)));
+    }
+}
+
 }   // namespace
 
 namespace SelfTest {
@@ -3539,6 +3679,7 @@ int run() {
     testGifWriter();
     testViewportBackground();
     testSolidCraftParity();
+    testCurvedBodyTools();
     std::printf("\n%d passed, %d failed\n", g_passes, g_failures);
     std::fflush(stdout);
     return g_failures;
@@ -3577,7 +3718,8 @@ int stepBench(const QString &path) {
 
 // Every solid tool on every face / edge / body of an imported file (--toolbench), with a per-tool summary.
 // TOOLBENCH_MAX caps the faces and edges tried per body (default 40). Each run is removed again, so every
-// tool works on the imported body as it came in.
+// tool works on the imported body as it came in. TOOLBENCH_TOOLS ("shell,draft") runs only the tools whose
+// name starts with one of the words; TOOLBENCH_VERBOSE=1 prints every run with its face or edge.
 int toolBench(const QString &path) {
     FissionDocument doc;
     const bool native = path.endsWith(".f360", Qt::CaseInsensitive);
@@ -3590,7 +3732,13 @@ int toolBench(const QString &path) {
     struct Tally { int ok = 0, total = 0; double worstMs = 0; QStringList errors; };
     QMap<QString, Tally> tally;
     QElapsedTimer clock;
+    const QStringList only = qEnvironmentVariable("TOOLBENCH_TOOLS").split(',', Qt::SkipEmptyParts);
+    const bool verbose = qEnvironmentVariableIntValue("TOOLBENCH_VERBOSE") > 0;
+    QString where;   // the face or edge of the current run, for verbose output
     auto run = [&](const QString &tool, const QString &type, const QVariantMap &props) {
+        if (!only.isEmpty()
+            && std::none_of(only.begin(), only.end(), [&](const QString &w) { return tool.startsWith(w.trimmed()); }))
+            return;
         clock.start();
         FissionFeature *f = doc.addFeature(type, props);
         const double ms = clock.elapsed();
@@ -3600,7 +3748,10 @@ int toolBench(const QString &path) {
         const bool ok = f && f->isHealthy();
         if (ok) ++t.ok;
         else if (t.errors.size() < 4) t.errors << (f ? f->error() : QStringLiteral("not created"));
-        if (ms > 5000) std::printf("  slow: %s %.0f ms\n", qPrintable(tool), ms);
+        if (verbose)
+            std::printf("  %-18s %-20s %6.0f ms  %s\n", qPrintable(tool), qPrintable(where), ms,
+                        ok ? "ok" : qPrintable(f ? f->error() : QStringLiteral("not created")));
+        else if (ms > 5000) std::printf("  slow: %s %.0f ms\n", qPrintable(tool), ms);
         if (f) doc.removeFeature(f);
         std::fflush(stdout);
     };
@@ -3620,6 +3771,7 @@ int toolBench(const QString &path) {
             const BRepAdaptor_Surface s(face);
             const QVariantMap ref = GeomUtils::faceRef(b, body, i);
             const gp_Pnt c = GeomUtils::faceCentroid(face);
+            where = QString("face %1 (type %2)").arg(i).arg(int(s.GetType()));
             if (s.GetType() == GeomAbs_Plane) {
                 run("extrude join", "Extrude", {{"profiles", QVariantList{ref}}, {"distance", "2 mm"}, {"operation", "join"}});
                 run("extrude cut", "Extrude", {{"profiles", QVariantList{ref}}, {"distance", "-0.5 mm"}, {"operation", "cut"}});
@@ -3635,9 +3787,11 @@ int toolBench(const QString &path) {
         }
         for (int i = 0; i < edges.Extent(); i += edgeStep) {
             const QVariantMap ref = GeomUtils::edgeRef(b, body, i);
+            where = QString("edge %1").arg(i);
             run("fillet", "Fillet", {{"edges", QVariantList{ref}}, {"radius", "0.2 mm"}});
             run("chamfer", "Chamfer", {{"edges", QVariantList{ref}}, {"distance", "0.2 mm"}});
         }
+        where = QString("body %1").arg(b);
         run("move", "Move", {{"bodies", QVariantList{b}}, {"translate", QVariantList{"5 mm", "0 mm", "0 mm"}}});
         run("scale", "Scale", {{"bodies", QVariantList{b}}, {"scale", "1.1"}});
         run("mirror", "Mirror", {{"bodies", QVariantList{b}}, {"plane", "YZ"}, {"operation", "newBody"}});

@@ -13,6 +13,23 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
+### 1.13.41 — Shell, Offset Face, Draft and Thread on imported, curved bodies
+- **Shell works on the 4KG Spool Hub** (revolved hub with slots and chamfers, 0.3 mm walls): 7–9 of 9 faces and the hollow body, up to 15 s. 1.13.40 managed 0/9 and 0/1, and ran up to 42 s.
+  - The whole Shell, including its ShapeFix / BRepCheck clean-up, now runs on a copy in a worker thread that the feature stops waiting for at 15 s. Before, the clean-up after each OCCT try was outside the budget.
+  - Every offset and every shell is checked against wall area × thickness. On the hub OCCT's Arc offset returned a closed, valid but plainly wrong inner solid (6.4 mm of a 32 mm part), and earlier punch "successes" were built on it.
+  - OCCT 7.6 returns the right offset there (Arc with complete intersection) only on about one run in three, so Shell retries it on fresh copies for up to 8 s. That is why the score moves between runs.
+  - Curved bodies try Arc and Intersection thick solids, each in its own worker for at most 3 s. OCCT's Intersection join on the hub ignored any time slice for 10–18 s.
+  - The punch fallback first removes the wall over the cavity: the inner faces under the opening are pushed out through the wall, which also works for curved openings. The older punch (opening grown and pushed in) cuts only 1.25 × wall deep on a flat opening (it was 2 × wall + 1 mm, which shortened the side walls).
+  - An offset that comes apart into several pieces keeps all of them.
+- **Offset Face** on the hub: 9/9, up to 3.4 s (1.13.40: 6/9, up to 31 s). Only cones that run between two walls take the round-chamfer path; tapers and other curved faces go to OCCT's offset (3 s in a worker), then to a slab fallback that adds or cuts the material between the face and its moved copy. Hex nut: 8/9 (was 1/9).
+- **Draft** on flat side faces of imported bodies: 3/3 on the hub (was 1/3). Where OCCT's draft fails, the face's plane is turned about the line where it meets the neutral plane and the body is cut or filled to it. On a plain box this matches OCCT's draft.
+- **Modeled Thread** has a 15 s limit (worker thread) and cuts with oriented bounding boxes and parallel intersection. On the McMaster threaded rod a thread went from 20–324 s to about 5 s (16/24 run on its own). The rod's already threaded 382-face body still mostly stops at the limit, with a message to use a cosmetic thread.
+- **Delete Face** passes its time limit on to OCCT, so a stopped worker no longer keeps a core busy for minutes. On the hub it now passes 9/9 (was 6/9).
+- Fixed along the way: faces found on a copied body (`BRepBuilderAPI_Copy::Modified`) lost their orientation, so their normals pointed inwards (`GeomUtils::copyWithFaces`). Worker threads now set OCCT's per-thread signal handler, so a crash inside one OCCT try moves on to the next try.
+- `--toolbench`: `TOOLBENCH_TOOLS=shell,draft` runs only those tools, `TOOLBENCH_VERBOSE=1` prints every run; `FISSION_TRACE_SHELL=1` prints each Shell try. The before / after table is in `FISSION_360_PROJECT.md` ("Imported bodies and solid tools").
+- Still open: Fillet and Chamfer have no time limit (threaded rod up to 190 s / 400 s); Fillet all edges 0.2 mm on the hub (0/1).
+- `--selftest` **450 passed, 0 failed** (10 new: time limits, draft fallback, draft next to chamfers, Offset Face on a cylinder and a tapered pin, Shell on a half cylinder opened on its round face, Shell and hollow on a chamfered, slotted hub). UI `shell` 1/1.
+
 ### 1.13.40 — Linked drawing dimensions, Fusion units, faster big files, Python, Shell hang
 - **Shell no longer hangs**:
   - Starting Shell with nothing picked hollowed the whole body at once. On a filleted, chamfered body (4KG Spool Hub) OCCT's offset never returned, and the window stopped responding.

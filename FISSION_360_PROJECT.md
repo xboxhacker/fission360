@@ -182,9 +182,9 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - **Version 1.13.40** (`FISSION_VERSION` in `CMakeLists.txt`; bump it every round of changes); Fusion add-in **1.10** / manifest **1.10.0** (`../F3D_Bulk_Export`)
 - **License:** GNU GPL-3.0-or-later (`LICENSE`; every source file has an `SPDX-License-Identifier` header); **About Fission 360** shows version, license text and `THIRD_PARTY_NOTICES.md` (Qt/LGPL, WebEngine/Chromium, OCCT, FreeType, slicer trademarks). Ship both files and a source link with every binary release. Build needs `-DFISSION_ORCA_ROOT=<OrcaSlicer checkout with built deps>` (or env var) for OCCT. New source files: add the SPDX header.
 - Fusion import: full timeline with BRep history (timeline scrubbing works) and an embedded preview — see "Fusion import" below
-- **108 C++** under `src/` (55 `.cpp` / 53 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
-- Last built binary: `build-rel\Release\Fission360.exe` **1.13.40** (not packaged). Last package: `dist\Fission360-1.13.36-windows-x64.zip`; `dist\Fission360` junctions to that folder. `scripts/package-windows.ps1` leaves out unused Quick Controls styles, the QML debugger plugins, the D3D12 shader compiler and WebEngine DevTools resources (~38 MB), then launches the packaged exe and refuses to write the zip if it quits or logs a QML load error. Published GitHub release: https://github.com/xboxhacker/fission360/releases/tag/v1.13.35 (broken at launch)
-- Self-tests: **440 passed, 0 failed** on the 1.13.40 build (`--selftest`). UI walkthrough last recorded at 163 checks when Drawing scaffolding landed; `FISSION_UITEST_ONLY=panels` / `=mcmaster` / `=shell` / `=open` run short scripts (panels 9/9, mcmaster 1/1, shell 1/1 on 1.13.40). `--toolbench <file>` runs every solid tool on an imported file; `FISSION_TRACE_IO=1` times each open / save stage
+- **116 C++** under `src/` (59 `.cpp` / 57 `.h`, incl. `kernel/drawing/`, `kernel/render/` + `PathTracer`, `kernel/mcmaster/`), **53 QML** under `assets/qml/` (incl. `FissionDrawing/`, `FissionRender/`, `McMasterInsertDialog`), Explorer thumbnail handler under `shell/`
+- Last built binary: `build-rel\Release\Fission360.exe` **1.13.41** (not packaged). Last package: `dist\Fission360-1.13.36-windows-x64.zip`; `dist\Fission360` junctions to that folder. `scripts/package-windows.ps1` leaves out unused Quick Controls styles, the QML debugger plugins, the D3D12 shader compiler and WebEngine DevTools resources (~38 MB), then launches the packaged exe and refuses to write the zip if it quits or logs a QML load error. Published GitHub release: https://github.com/xboxhacker/fission360/releases/tag/v1.13.35 (broken at launch)
+- Self-tests: **450 passed, 0 failed** on the 1.13.41 build (`--selftest`). UI walkthrough last recorded at 163 checks when Drawing scaffolding landed; `FISSION_UITEST_ONLY=panels` / `=mcmaster` / `=shell` / `=open` run short scripts (panels 9/9, mcmaster 1/1 on 1.13.40; shell 1/1 on 1.13.41). `--toolbench <file>` runs every solid tool on an imported file (`TOOLBENCH_TOOLS`, `TOOLBENCH_VERBOSE`); `FISSION_TRACE_IO=1` times each open / save stage, `FISSION_TRACE_SHELL=1` every Shell try
 - **1.13.29–1.13.34 (shipped):** command registry + `Fission360 --mcp`; startup GitHub update check; File ▸ Export Viewport PNG (no grid); Display Settings grid toggle; **Report Bug** (top bar / File / Help); INSERT ribbon captions **Mesh / STEP / McMaster**; Shell retries OCCT complete-intersection, then a punch fallback, and rejects tiny corner-spike faces; version history is a compressed `history` array **inside** the `.f360` (legacy `.versions` sidecars migrate on save)
 - **Save**: Compact JSON once, chunked write + progress (large Fusion exports stay responsive); `testLargeFileSave` (~11 MB synthetic). The file also stores `resultCache` (solids at the saved timeline marker as binary BRep, `BinTools`, zlib level 1, since 1.13.40; older files have text BRep under `brep`, still read). Its key hashes units, parameters and the feature data directly (no JSON encode). A matching open skips the rebuild and returns to that marker, including when it is not at the end. Undo and version snapshots omit the cache.
 - **Phases done:** 1–3, 5 (mesh except organic convert), 6 (import/export + Fusion), 7 (sheet metal), 8 (scripts), 9 (drawing), **10 (Render & Appearance)**; Phase 12 **Send to Orca** (thin handoff). **Open:** Phase 4 leftovers (curvature comb, …), Phase 5 organic mesh convert, Phase 11 sync; Phase 12 MFG catalog wired (true CAM kernel / collision sim / mfg model still later)
@@ -236,21 +236,39 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - **Offline Render**: Engine **Path Trace (Monte Carlo)** = CPU BVH path tracer (`PathTracer`, quality → spp). Engine **Viewport** = supersampled `grabToImage` (1×…3×).
 
 ## Imported bodies and solid tools (`--toolbench`)
-`Fission360.exe --toolbench <file.step|.iges|.f360>` runs every solid tool on faces and edges spread over each body (`TOOLBENCH_MAX`, default 40 per body) and on each whole body, removes each result again, and prints ok / total, the slowest run and the first errors per tool. Results on the 1.13.40 build:
-- **4KG Spool Hub** (revolved hub with slots and chamfers; 25 faces, 63 edges; 8 faces / 8 edges sampled):
-  - **All passed:** extrude join and cut 4/4, hole 4/4, move, scale, mirror.
-  - **Mostly passed:** fillet and chamfer 0.2 mm 6/9, Delete Face 6/9.
-  - **Failed:**
-    - **Shell 0/9 and hollow 0/1.** Every attempt hits the 15 s limit, and the clean-up after each OCCT try (ShapeFix, BRepCheck) is not counted, so it actually stops at up to 36 s.
-    - **Offset Face 6/9.** Curved faces that are not chamfers end in the round-chamfer path ("This face is not a single chamfer"), up to 26 s.
-    - **Draft 1/3**, and **fillet all edges 0/1**.
-- **McMaster hex nut** (threaded): Delete Face on thread faces stops at its 15 s limit (it took up to 200 s before 1.13.40). Fillets, chamfers and shells on the helical thread faces fail; Thread takes 6–8 s.
-- **McMaster threaded rod**: Thread takes up to about 50 s (modeled helical sweep, no time limit yet).
+`Fission360.exe --toolbench <file.step|.iges|.f360>` runs every solid tool on faces and edges spread over each body (`TOOLBENCH_MAX`, default 40 per body) and on each whole body, removes each result again, and prints ok / total, the slowest run and the first errors per tool. `TOOLBENCH_TOOLS=shell,draft` runs only those tools; `TOOLBENCH_VERBOSE=1` prints every run with its face or edge. `FISSION_TRACE_SHELL=1` prints each Shell try with its time and why it was turned down.
+
+Before (1.13.40) and after (1.13.41), `TOOLBENCH_MAX=8`:
+
+| Body | Tool | 1.13.40 | 1.13.41 |
+|---|---|---|---|
+| 4KG Spool Hub | Shell (one face open, 0.3 mm) | 0/9, up to 42 s | 7–9/9 (varies by run, see below), up to 15 s |
+| 4KG Spool Hub | Shell (hollow) | 0/1, 29 s | 1/1, 3–6 s |
+| 4KG Spool Hub | Offset Face 0.2 mm | 6/9, up to 31 s | 9/9, up to 3.4 s |
+| 4KG Spool Hub | Draft 2° (XY) | 1/3 | 3/3 |
+| 4KG Spool Hub | Delete Face | 6/9 | 9/9 |
+| 4KG Spool Hub | Fillet all edges 0.2 mm | 0/1 | 0/1 (unchanged) |
+| McMaster hex nut | Offset Face | 1/9 | 8/9 (one stops at its 9 s limit) |
+| McMaster hex nut | Shell, hollow | 0/9, 0/1 | 0/9, 0/1 (the helical faces cannot be offset) |
+| McMaster threaded rod | Thread (modeled) | 23/24, up to 324 s | 16/24 on its own, ~5 s each on bodies 0 and 1; the already threaded 382-face body mostly stops at the 15 s limit |
+
+What changed (1.13.41):
+- **Time limits that hold.** `GeomUtils::runWithTimeLimit` runs the work on a copy of the body in a worker thread and gives up after the limit; `GeomUtils::TimeLimit` (`src/kernel/TimeLimit.h`) also asks OCCT to stop. Shell (15 s, clean-up included), Offset Face (3 s OCCT offset + 6 s fallback), Modeled Thread (15 s) and Delete Face (15 s) use it. OCCT checks the progress only between its own steps, so a worker the feature gave up on can keep a core busy until its next check; that is why the full sweep (which stacks many such runs) scores the rod's threads lower (2/24) than a thread-only run.
+- **Shell:**
+  - **The offset is checked.** On the Spool Hub, OCCT's Arc offset without complete intersection returned a closed, valid "inner" solid only 6.4 mm tall on a 32 mm part. Every offset and every shell is now weighed against the wall area × thickness (0.4–1.8×) and turned down when it is far off.
+  - **Arc with complete intersection is the right offset there, but OCCT 7.6 gives it only on about one run in three** (the others return an empty shape from the same input, even on one thread). Shell retries it on fresh copies for up to 8 s (about 0.7 s per run on the hub). That is why the hub's score moves between 7/9 and 9/9 from run to run.
+  - Curved bodies try Arc and Intersection thick solids, each in its own worker for at most 3 s (6 s for all of them), then the punch fallback.
+  - **Punch fallback:** the body is hollowed by the checked offset. The wall over the cavity is then removed: the inner faces one wall under the opening are pushed out through it. That also works for curved openings. Where no inner face matches, the opening is grown and pushed in, as before. That push is now only 1.25 × wall deep for a flat opening (it was 2 × wall + 1 mm, which shortened the side walls around it).
+  - Every offset of the shell keeps all its pieces (where the body is thinner than two walls the offset comes apart), not just the first.
+- **Offset Face:** only cones that run between two walls take the round-chamfer path. Other faces, and chamfers that cannot be rebuilt, go to OCCT's offset (3 s in a worker), then to a slab fallback: the material between the face and its moved copy (a prism for a flat face, the face thickened for a curved one) is added or cut. The result has to move the volume the right way, by roughly area × distance.
+- **Draft:** where OCCT's draft fails on a flat face, the face's plane is turned about the line where it meets the neutral plane and the body is cut or filled to it over the face's outline (`draftFlatFace`). On a plain box this matches OCCT's draft to 1e-4.
+- **Modeled Thread:** the cut runs in a worker (15 s) with oriented bounding boxes and parallel intersection. Threads on the McMaster rod went from 20–324 s to about 5 s.
+- OCCT pitfalls found on the way: `BRepBuilderAPI_Copy::Modified(face)` returns the face without its orientation in the solid (normals then point inwards; `GeomUtils::copyWithFaces` finds the oriented one). `MakeThickSolidBySimple` can return an inside-out solid. `OSD::SetSignal` is per thread on Windows (workers call `OSD::SetThreadLocalSignal`). `Message_ProgressIndicator.hxx` pulls in `windows.h`, whose `near` / `far` macros break other files, so it stays out of `GeomUtils.h`.
 - Open work, in order:
-  1. Shell on curved / chamfered bodies, with all of its post-processing inside the time budget.
-  2. Offset Face routing for curved faces that are not chamfers.
-  3. Draft on side faces of imported bodies.
-  4. A time limit on modeled threads.
+  1. Fillet and Chamfer have no time limit yet (the threaded rod: up to 190 s and 400 s).
+  2. Fillet all edges at 0.2 mm on the Spool Hub.
+  3. Shell where the cavity punch finds no inner face still uses the grown-opening punch, which leaves the side walls up to about one wall short at the opening.
+  4. Modeled threads on bodies that are already threaded (the rod's third body).
 
 ## Fusion Import (`F3D_Bulk_Export` add-in → Fission)
 - **Add-in** (Fusion: UTILITIES ▸ ADD-INS ▸ Scripts and Add-Ins). Modes: Active design / All open designs / Active Data Panel folder (one folder, never a recursive cloud walk — that hangs Fusion). Options: Include STEP, BRep per timeline step, Unhide all, Overwrite.
@@ -315,7 +333,7 @@ This was the original plan for Phases 4–5. What is built so far lives in the f
 - [x] Fusion default keyboard shortcuts, S command search, Shortcuts dialog
 - [x] Document Settings in the browser: units (length, mass), density, design info; Named Views
 - [x] Window / freeform / paint selection (1/2/3)
-- [x] 96 self-tests and 87 UI walkthrough checks passing when Phase 3 closed (1.13.6 was **339/1**, with `loft: rail guide` still failing). Local **1.13.40** is **440 passed, 0 failed**; that loft passes at volume 7000. UI walkthrough last at 163. Live Render / McMaster ribbon fix in **1.13.7**.
+- [x] 96 self-tests and 87 UI walkthrough checks passing when Phase 3 closed (1.13.6 was **339/1**, with `loft: rail guide` still failing). Local **1.13.41** is **450 passed, 0 failed**; that loft passes at volume 7000. UI walkthrough last at 163. Live Render / McMaster ribbon fix in **1.13.7**.
 - [x] Region selection skips items hidden behind body faces (coarse depth grid; sketch curves and profiles are always pickable) *(1.13.4)*
 - [x] Hole (H) and Move/Copy (M) keys now start their commands; Shift+S opens Scripts; Ctrl+A / Del select and remove bodies; **A** opens Appearance (bodies or faces)
 - [x] Joint (J) and As-built Joint (Shift+J) on bodies (rigid / revolute / slider / cylindrical, angle and offset); Shift+N component colour cycling (one hue per body) *(1.13.4)*

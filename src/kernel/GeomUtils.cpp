@@ -5,6 +5,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom2d_Curve.hxx>
@@ -13,6 +14,7 @@
 #include <BRepGProp.hxx>
 #include <BRep_Builder.hxx>
 #include <GProp_GProps.hxx>
+#include <OSD.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -21,7 +23,12 @@
 #include <TopoDS_Compound.hxx>
 #include <Poly_Triangulation.hxx>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace GeomUtils {
 
@@ -303,6 +310,47 @@ gp_Ax3 standardPlane(const QString &name, bool *ok) {
     if (name == "YZ") return gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0), gp_Dir(0, 1, 0));
     if (ok) *ok = false;
     return gp_Ax3();
+}
+
+TopoDS_Shape copyWithFaces(const TopoDS_Shape &shape, const QList<TopoDS_Face> &faces, QList<TopoDS_Face> &onCopy) {
+    BRepBuilderAPI_Copy copier(shape);
+    const TopoDS_Shape copy = copier.Shape();
+    onCopy.clear();
+    for (const TopoDS_Face &f : faces) {
+        const TopTools_ListOfShape &m = copier.Modified(f);
+        const TopoDS_Shape wanted = m.IsEmpty() ? TopoDS_Shape(f) : m.First();
+        TopoDS_Face found = TopoDS::Face(wanted);
+        for (TopExp_Explorer e(copy, TopAbs_FACE); e.More(); e.Next())
+            if (e.Current().IsSame(wanted)) {
+                found = TopoDS::Face(e.Current());
+                break;
+            }
+        onCopy << found;
+    }
+    return copy;
+}
+
+bool runWithTimeLimit(qint64 ms, std::function<void()> work) {
+    struct State {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+    };
+    auto state = std::make_shared<State>();
+    std::thread([state, work = std::move(work)] {
+        // OCCT turns access violations into exceptions per thread; without this a crash inside one OCCT try
+        // skips the Standard_Failure handlers that move on to the next try
+        OSD::SetThreadLocalSignal(OSD_SignalMode_Set, false);
+        try {
+            work();
+        } catch (...) {
+        }
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->done = true;
+        state->cv.notify_all();
+    }).detach();
+    std::unique_lock<std::mutex> lock(state->mutex);
+    return state->cv.wait_for(lock, std::chrono::milliseconds(ms), [&] { return state->done; });
 }
 
 }
