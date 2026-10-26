@@ -26,6 +26,7 @@ Rectangle {
         case "Sweep": return "SweepDialog.qml"
         case "Mirror": return "MirrorDialog.qml"
         case "RectangularPattern": case "CircularPattern": return "PatternDialog.qml"
+        case "Box": case "Cylinder": case "Sphere": case "Torus": case "Coil": case "Pipe":
         case "Hole": case "Thread": case "Combine": case "Move": case "Scale": case "SplitBody": case "SplitFace":
         case "OffsetFace": case "Offset": case "ReplaceFace": case "Draft": case "PathPattern": case "Rib": case "Web": case "Joint":
         case "InsertMesh": case "MeshConvert": case "MeshReverse": case "MeshSmooth": case "MeshReduce": case "MeshPlaneCut":

@@ -13,6 +13,7 @@ Written clean-room: the codebase is hand-built and not derived from any other CA
 ## What it does
 
 - **Parametric solid modelling** — extrude, revolve, sweep, loft, fillet (constant & variable radius), chamfer, shell, hole + thread (ISO coarse/fine, UNC/UNF, clearance & tap drill), combine, move, scale, split body/face, offset face, draft (plane/edge/axis pull), joint / as-built joint, pattern (incl. on-path), rib, web.
+- **Primitive solid bodies** — box, cylinder, sphere, torus, coil (helical tube), pipe (swept tube along a straight axis), each with a live spec dialog to tune its size and position.
 - **Sketching** — line, arc, circle, rectangle, spline with a live solver, geometric constraints and dimensions.
 - **Construction geometry** — planes, axes, points; planar face selection for sketch planes and direct face extrudes/revolves/sweeps.
 - **In-viewport interaction** — floating draggable dialogs, in-viewport sketch preview with dimension text boxes, and feature drag handles (extrude distance/taper, fillet, chamfer, hole depth) that accept typed values.

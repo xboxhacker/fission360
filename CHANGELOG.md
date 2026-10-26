@@ -11,7 +11,18 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — **1.13.41** is the current GitHub release ([v1.13.41](https://github.com/xboxhacker/fission360/releases/tag/v1.13.41)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — **1.13.42** is the current GitHub release ([v1.13.42](https://github.com/xboxhacker/fission360/releases/tag/v1.13.42)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+
+### 1.13.42 — Primitive solid bodies (Box, Cylinder, Sphere, Torus, Coil, Pipe)
+- Six new **SOLID CREATE** tools, each with a live spec dialog to tune its parameters:
+  - **Box** — width / depth / height.
+  - **Cylinder** — radius / height.
+  - **Sphere** — radius.
+  - **Torus** — major radius + tube radius.
+  - **Coil** — helical tube: coil diameter, tube diameter, pitch and height.
+  - **Pipe** — straight tube: outer diameter, wall thickness and length.
+- Each can be placed at an **origin** (x, y, z) and applied as a **join / cut / intersect** onto the selected body or faces, so it combines with the rest of the timeline.
+- **Coil** and **Pipe** sweep a circle with the fixed-binormal mode, so the tube stays in a plane through the axis (no twist) — the same construction the Hole thread uses.
 
 ### 1.13.41 — Shell, Offset Face, Draft and Thread on imported, curved bodies
 - **Shell works on the 4KG Spool Hub** (revolved hub with slots and chamfers, 0.3 mm walls): 7–9 of 9 faces and the hollow body, up to 15 s. 1.13.40 managed 0/9 and 0/1, and ran up to 42 s.

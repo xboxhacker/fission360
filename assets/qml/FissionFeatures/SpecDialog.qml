@@ -101,6 +101,45 @@ FeatureDialog {
             { kind: "note", textOf: f => f && f.designation ? "Designation: " + f.designation : "" },
             { kind: "note", text: "Pick a cylindrical face (shaft or hole). Empty pitch = ISO metric coarse, empty length = whole face." }
         ],
+        Box: [
+            { kind: "number", label: "Width", key: "width" },
+            { kind: "number", label: "Length", key: "length" },
+            { kind: "number", label: "Depth", key: "depth" },
+            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the origin corner" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
+        Cylinder: [
+            { kind: "number", label: "Diameter", key: "diameter" },
+            { kind: "number", label: "Height", key: "height" },
+            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the base center" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
+        Sphere: [
+            { kind: "number", label: "Diameter", key: "diameter" },
+            { kind: "point3", label: "Center", key: "origin", prompt: "Click the center" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
+        Torus: [
+            { kind: "number", label: "Inner diameter", key: "innerDiameter" },
+            { kind: "number", label: "Tube diameter", key: "tubeDiameter" },
+            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the center" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
+        Coil: [
+            { kind: "number", label: "Diameter", key: "diameter" },
+            { kind: "number", label: "Tube diameter", key: "tubeDiameter" },
+            { kind: "number", label: "Pitch", key: "pitch" },
+            { kind: "number", label: "Height", key: "height" },
+            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the start" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
+        Pipe: [
+            { kind: "number", label: "Outer diameter", key: "outerDiameter" },
+            { kind: "number", label: "Inner diameter", key: "innerDiameter" },
+            { kind: "number", label: "Length", key: "length" },
+            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the base center" },
+            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+        ],
         Combine: [
             { kind: "selection", label: "Target body", key: "target", sel: "body", filter: bodyFilter, autoNext: true },
             { kind: "selection", label: "Tool bodies", key: "tools", sel: "bodies", filter: bodyFilter },
@@ -128,189 +167,113 @@ FeatureDialog {
               when: p => p.moveType === "pointToPoint" },
             { kind: "vector", key: "translate", labels: ["X position", "Y position", "Z position"],
               when: p => p.moveType === "pointToPosition" },
-            { kind: "bool", label: "Create copy", key: "copy" },
-            { kind: "note", textOf: f => moveHint(f) }
+            { kind: "note", textOf: f => sd.moveHint(f) }
         ],
         Scale: [
-            { kind: "selection", label: "Objects", key: "bodies", sel: "bodies", filter: bodyFilter },
-            { kind: "selection", label: "Point", key: "point", sel: "point", filter: "point", presets: [["", "Origin"]] },
-            { kind: "choice", label: "Scale type", key: "scaleType", options: [["uniform", "Uniform"], ["nonUniform", "Non-uniform"]] },
-            { kind: "number", label: "Scale factor", key: "scale", unit: "", when: p => p.scaleType !== "nonUniform" },
-            { kind: "number", label: "X scale", key: "scaleX", unit: "", when: p => p.scaleType === "nonUniform" },
-            { kind: "number", label: "Y scale", key: "scaleY", unit: "", when: p => p.scaleType === "nonUniform" },
-            { kind: "number", label: "Z scale", key: "scaleZ", unit: "", when: p => p.scaleType === "nonUniform" }
+            { kind: "selection", label: "Bodies", key: "bodies", sel: "bodies", filter: bodyFilter },
+            { kind: "vector", key: "scale", labels: ["Scale X", "Scale Y", "Scale Z"], unit: "" },
+            { kind: "bool", label: "Non-uniform", key: "nonUniform" }
         ],
         SplitBody: [
-            { kind: "selection", label: "Body to split", key: "bodies", sel: "bodies", filter: bodyFilter, autoNext: true },
-            plane("Splitting plane", "tool"),
-            { kind: "selection", label: "Or tool body", key: "toolBody", sel: "body", filter: bodyFilter, presets: [[-1, "None"]] },
-            { kind: "note", text: "Each piece becomes its own body." }
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Split with", key: "faces", sel: "faces", filter: "face" },
+            { kind: "note", text: "The body is split along the picked faces. Drag the arrow to flip which side is removed." }
         ],
         SplitFace: [
-            { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face", autoNext: true },
-            plane("Splitting tool", "tool")
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Faces to split", key: "faces", sel: "faces", filter: "face" },
+            { kind: "selection", label: "Cut with", key: "cutFaces", sel: "faces", filter: "face" }
         ],
         OffsetFace: [
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
             { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face" },
-            { kind: "number", label: "Distance", key: "distance" }
+            { kind: "number", label: "Offset", key: "offset" }
         ],
         Offset: [
-            { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face", when: p => !(p.bodies && p.bodies.length) },
-            { kind: "selection", label: "Or bodies", key: "bodies", sel: "bodies", filter: "body", when: p => !(p.faces && p.faces.length) },
-            { kind: "number", label: "Distance", key: "distance" },
-            { kind: "note", text: "Creates offset copies as new bodies; negative distances go inward." }
-        ],
-        ReplaceFace: [
-            { kind: "selection", label: "Source faces", key: "faces", sel: "faces", filter: "face", autoNext: true },
-            plane("Target plane", "plane")
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "number", label: "Offset", key: "offset" },
+            { kind: "note", textOf: f => f && f.summary ? f.summary : "" },
+            { kind: "note", text: "Offsets every face of the body outward. Drag the arrow to set the offset. "
+                                  + "It reports faces that would flip or self-intersect before it commits." }
         ],
         Draft: [
-            { kind: "choice", label: "Type", key: "draftType", options: [["face", "Fixed plane"], ["parting", "Parting line"]] },
-            { kind: "selection", label: "Pull direction", key: "plane", sel: "pull", filter: "face,plane,edge,axis,sketchcurve",
-              presets: planePresets, autoNext: true, inputView: true },
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
             { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face" },
             { kind: "number", label: "Angle", key: "angle" },
-            { kind: "bool", label: "Flip pull", key: "flip" },
-            { kind: "note", text: "Pick what sets the pull direction first, then the faces to tilt: a flat face or plane (its normal), "
-                                  + "a round face (its axis), a straight edge, an axis or a sketch line. "
-                                  + "With two faces picked before starting, the first is the pull direction." }
+            { kind: "selection", label: "Neutral plane", key: "plane", sel: "plane", filter: "face,plane" },
+            { kind: "note", text: "Drafts the picked faces about the neutral plane. Drag the angle handle to set the angle." }
+        ],
+        ReplaceFace: [
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Faces to replace", key: "faces", sel: "faces", filter: "face" },
+            { kind: "note", text: "Replaces the picked faces with the nearest face of another body." }
         ],
         Joint: [
-            { kind: "selection", label: "Component", key: "bodies", sel: "bodies", filter: bodyFilter, autoNext: true },
-            { kind: "selection", label: "Moving origin", key: "from", sel: "origin", filter: "face,edge", autoNext: true,
-              inputView: true, when: p => !p.asBuilt },
-            { kind: "selection", label: "Target origin", key: "to", sel: "origin", filter: "face,edge", inputView: true,
-              when: p => !p.asBuilt },
-            { kind: "selection", label: "Joint origin", key: "to", sel: "origin", filter: "face,edge", inputView: true,
-              when: p => !!p.asBuilt },
-            { kind: "types", label: "Motion", key: "motion",
-              options: [["rigid", "Rigid: locked in place", "joint"],
-                        ["revolute", "Revolute: turns about the joint axis", "moverotate"],
-                        ["slider", "Slider: slides along the joint axis", "movetranslate"],
-                        ["cylindrical", "Cylindrical: turns and slides", "revolve"]] },
+            { kind: "selection", label: "Moving bodies", key: "bodies", sel: "bodies", filter: bodyFilter },
+            { kind: "selection", label: "Base body", key: "base", sel: "body", filter: bodyFilter },
+            { kind: "choice", label: "Motion", key: "motion",
+              options: [["revolute", "Revolute"], ["slider", "Slider"], ["cylindrical", "Cylindrical"], ["fixed", "Fixed"]] },
+            { kind: "point3", label: "Joint origin", key: "origin", prompt: "Click the joint origin" },
+            { kind: "selection", label: "Joint axis", key: "axis", sel: "axis", filter: "edge,axis,sketchcurve", presets: axisPresets },
             { kind: "number", label: "Angle", key: "angle" },
-            { kind: "number", label: "Offset Z", key: "offset" },
-            { kind: "bool", label: "Flip", key: "flip", when: p => !p.asBuilt },
+            { kind: "number", label: "Offset Z", key: "offsetZ" },
+            { kind: "bool", label: "As-built joint", key: "asBuilt" },
             { kind: "note", textOf: f => sd.jointHint(f) }
         ],
         PathPattern: [
-            { kind: "selection", label: "Objects", key: "bodies", sel: "bodies", filter: bodyFilter, autoNext: true },
-            { kind: "selection", label: "Path", key: "path", sel: "path", filter: "sketchcurve" },
-            { kind: "number", label: "Quantity", key: "count", unit: "" },
-            { kind: "number", label: "Distance", key: "distance" },
-            { kind: "choice", label: "Orientation", key: "orientation", options: [["identical", "Identical"], ["path", "Path direction"]] },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "Join"], ["newBody", "New Body"]] },
-            { kind: "note", text: "Empty distance = spread over the whole path." }
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Path", key: "path", sel: "path", filter: "sketchcurve,edge,axis" },
+            { kind: "number", label: "Count", key: "count", unit: "" },
+            { kind: "number", label: "Spacing", key: "spacing" },
+            { kind: "bool", label: "Occur along path", key: "occurs" },
+            { kind: "note", text: "Patterns the feature along the path. Drag the arrow to set the count." }
         ],
         Rib: [
-            { kind: "selection", label: "Curves", key: "sketch", sel: "sketch", filter: "sketchcurve" },
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face" },
             { kind: "number", label: "Thickness", key: "thickness" },
-            { kind: "choice", label: "Depth", key: "extent", options: [["toNext", "To next"], ["distance", "Distance"]] },
-            { kind: "number", label: "Distance", key: "depth", when: p => p.extent === "distance" },
-            { kind: "bool", label: "Flip", key: "flip" }
+            { kind: "number", label: "Depth", key: "depth" }
         ],
         Web: [
-            { kind: "selection", label: "Curves", key: "sketch", sel: "sketch", filter: "sketchcurve" },
+            { kind: "selection", label: "Body", key: "body", sel: "body", filter: bodyFilter },
+            { kind: "selection", label: "Faces", key: "faces", sel: "faces", filter: "face" },
             { kind: "number", label: "Thickness", key: "thickness" },
-            { kind: "choice", label: "Depth", key: "extent", options: [["toNext", "To next"], ["distance", "Symmetric distance"]] },
-            { kind: "number", label: "Distance", key: "depth", when: p => p.extent === "distance" }
-        ],
-        InsertMesh: [
-            { kind: "note", textOf: f => f ? "File: " + f.props.fileName + "  (units: " + f.props.unit + ")" : "" },
-            { kind: "note", text: "The triangles are stored in the design, so the file is no longer needed." }
-        ],
-        MeshConvert: [
-            { kind: "choice", label: "Direction", key: "direction", options: [["toBRep", "Mesh \u2192 Solid"], ["toMesh", "Solid \u2192 Mesh"]] },
-            { kind: "selection", label: "Bodies", key: "bodies", sel: "bodies", filter: "body,face" },
-            { kind: "choice", label: "Refinement", key: "refinement", when: p => p.direction === "toMesh",
-              options: [["coarse", "Coarse"], ["medium", "Medium"], ["fine", "Fine"]] },
-            { kind: "choice", label: "Method", key: "method", when: p => p.direction !== "toMesh",
-              options: [["prismatic", "Prismatic"], ["faceted", "Faceted"]] },
-            { kind: "note", textOf: f => f && f.summary ? "Result: " + f.summary : "" },
-            { kind: "note", text: "Pick the bodies to convert. Prismatic fits planes, cylinders, cones and spheres with true "
-                                  + "round edges; on a mesh with face groups each group is fitted as one patch. Faceted keeps "
-                                  + "the flat triangles (coplanar ones merged). Both need a closed mesh; open meshes get one "
-                                  + "face per triangle." }
-        ],
-        MeshFaceGroups: [
-            { kind: "selection", label: "Mesh bodies", key: "bodies", sel: "bodies", filter: "body,face" },
-            { kind: "choice", label: "Type", key: "method", options: [["accurate", "Accurate"], ["fast", "Fast"]] },
-            { kind: "number", label: "Boundary tolerance", key: "tolerance", unit: "", when: p => p.method !== "fast" },
-            { kind: "number", label: "Angle threshold", key: "angle", when: p => p.method === "fast" },
-            { kind: "number", label: "Min group size %", key: "minSize", unit: "" },
-            { kind: "note", textOf: f => f && f.summary ? "Result: " + f.summary : "" },
-            { kind: "note", text: "Splits the mesh into face groups, shown in colour. Accurate fits planes, cylinders, "
-                                  + "cones and spheres; Boundary tolerance is a fraction of the body size (Fusion: 0 to "
-                                  + "0.01, default 0.001) — how far vertices may sit from a primitive. Fast splits where "
-                                  + "neighbouring triangles bend more than the angle. Min group size is Fast-only. "
-                                  + "Convert Mesh (Prismatic) makes one face from each group." }
-        ],
-        MeshRemesh: [
-            { kind: "selection", label: "Mesh bodies", key: "bodies", sel: "bodies", filter: "body,face" },
-            { kind: "number", label: "Target edge length", key: "edgeLength" },
-            { kind: "bool", label: "Adaptive", key: "adaptive" },
-            { kind: "number", label: "Iterations", key: "iterations", unit: "" },
-            { kind: "number", label: "Keep edges sharper than", key: "sharpAngle" },
-            { kind: "note", textOf: f => f && f.summary ? "Result: " + f.summary : "" },
-            { kind: "note", text: "Rebuilds the triangles at an even size close to the target length. Adaptive uses smaller "
-                                  + "triangles where the surface bends. Sharp edges and open boundaries stay in place." }
-        ],
-        ImportCAD: [
-            { kind: "note", textOf: f => f ? f.props.format + " file: " + f.props.fileName : "" },
-            { kind: "note", text: "The geometry is stored in the design, so the file is no longer needed. Each solid is a body; "
-                                  + "loose surfaces are kept together as one body." }
+            { kind: "number", label: "Depth", key: "depth" }
         ],
         BaseFlange: [
-            { kind: "selection", label: "Profile", key: "profiles", sel: "profiles", filter: "profile" },
+            { kind: "selection", label: "Sheet body", key: "body", sel: "body", filter: "body,face", presets: [[-1, "First sheet"]] },
             { kind: "number", label: "Thickness", key: "thickness" },
-            { kind: "bool", label: "Flip", key: "flip" },
-            { kind: "note", text: "Thickens a closed sketch profile into a sheet. Thickness defaults to the sheet metal rule "
-                                  + "(parameter SheetThickness)." }
+            { kind: "number", label: "Bend radius", key: "bendRadius" },
+            { kind: "number", label: "Offset", key: "offset" }
         ],
         EdgeFlange: [
-            { kind: "selection", label: "Edge", key: "edge", sel: "edge", filter: "edge" },
-            { kind: "number", label: "Height", key: "height" },
-            { kind: "number", label: "Angle", key: "angle" },
+            { kind: "selection", label: "Edge", key: "face", sel: "face", filter: "edge,face" },
+            { kind: "number", label: "Length", key: "length" },
+            { kind: "number", label: "Thickness", key: "thickness" },
             { kind: "number", label: "Bend radius", key: "bendRadius" },
-            { kind: "bool", label: "Bend down", key: "flip" },
-            { kind: "note", text: "Pick a straight edge along the top or bottom of a sheet. Height is the flat length after the "
-                                  + "bend; the bend radius defaults to the sheet metal rule (BendRadius)." }
-        ],
-        FlatPattern: [
-            { kind: "selection", label: "Sheet body", key: "body", sel: "body", filter: "body,face", presets: [[-1, "First sheet"]] },
-            { kind: "number", label: "K-factor", key: "kFactor", unit: "" },
-            { kind: "note", textOf: f => f && f.summary ? f.summary : "" },
-            { kind: "note", text: "Unfolds every bend of the sheet, flanges on flanges included, into the sheet plane (bend "
-                                  + "length = angle \u00d7 (R + K \u00d7 T)) and lays the result out beside the model as a new "
-                                  + "body. Export it with Flat Pattern \u2192 Export DXF." }
+            { kind: "number", label: "Angle", key: "angle" },
+            { kind: "choice", label: "Bend", key: "bend", options: [["none", "None"], ["inside", "Inside"], ["outside", "Outside"]] }
         ],
         Hem: [
-            { kind: "selection", label: "Edge", key: "edge", sel: "edge", filter: "edge" },
-            { kind: "choice", label: "Type", key: "hemType", options: [["flat", "Flat"], ["open", "Open"], ["rolled", "Rolled"]] },
-            { kind: "number", label: "Gap", key: "gap", when: p => p.hemType === "flat" },
-            { kind: "number", label: "Radius", key: "radius", when: p => p.hemType !== "flat" },
-            { kind: "number", label: "Angle", key: "angle", when: p => p.hemType === "rolled" },
+            { kind: "selection", label: "Edge", key: "face", sel: "face", filter: "edge,face" },
             { kind: "number", label: "Length", key: "length" },
-            { kind: "bool", label: "Fold down", key: "flip" },
-            { kind: "note", text: "Folds a sheet edge back on itself. Flat leaves the gap between the sheet and the fold; Open "
-                                  + "folds round the radius; Rolled curls the edge through the angle (180\u2013360 deg)." }
+            { kind: "number", label: "Thickness", key: "thickness" },
+            { kind: "number", label: "Bend radius", key: "bendRadius" },
+            { kind: "number", label: "Angle", key: "angle" }
         ],
         Tab: [
-            { kind: "selection", label: "Profile", key: "profiles", sel: "profiles", filter: "profile" },
+            { kind: "selection", label: "Edge", key: "face", sel: "face", filter: "edge,face" },
+            { kind: "number", label: "Length", key: "length" },
             { kind: "number", label: "Thickness", key: "thickness" },
-            { kind: "bool", label: "Flip", key: "flip" },
-            { kind: "note", text: "Adds a sketch profile to the sheet it touches, in the sheet's plane. Sketch on a sheet face; "
-                                  + "the tab grows into the sheet. Flip uses the other side of the sketch plane." }
+            { kind: "number", label: "Bend radius", key: "bendRadius" },
+            { kind: "choice", label: "Shape", key: "shape", options: [["rect", "Rectangle"], ["tri", "Triangle"]] }
         ],
         Bend: [
-            { kind: "selection", label: "Bend line", key: "line", sel: "axis", filter: "sketchcurve" },
-            { kind: "number", label: "Angle", key: "angle" },
+            { kind: "selection", label: "Edge", key: "face", sel: "face", filter: "edge,face" },
             { kind: "number", label: "Bend radius", key: "bendRadius" },
-            { kind: "number", label: "K-factor", key: "kFactor", unit: "" },
-            { kind: "bool", label: "Other side moves", key: "flip" },
-            { kind: "bool", label: "Bend down", key: "down" },
-            { kind: "note", text: "Pick a sketch line drawn on a sheet face. The sheet folds along it and keeps its flat "
-                                  + "length: the bend uses up sheet past the line." }
+            { kind: "number", label: "Angle", key: "angle" },
+            { kind: "choice", label: "Bend", key: "bend", options: [["inside", "Inside"], ["outside", "Outside"]] },
+            { kind: "note", text: "Bends the sheet along the picked edge. Drag the angle handle to set the bend angle." }
         ],
         ContourFlange: [
             { kind: "selection", label: "Profile lines", key: "sketch", sel: "path", filter: "sketchcurve" },

@@ -6,6 +6,12 @@
 #include "FissionConstruction.h"
 #include "FissionExtrude.h"
 #include "FissionRevolve.h"
+#include "FissionBox.h"
+#include "FissionCylinder.h"
+#include "FissionSphere.h"
+#include "FissionTorus.h"
+#include "FissionCoil.h"
+#include "FissionPipe.h"
 #include "FissionFillet.h"
 #include "FissionChamfer.h"
 #include "FissionLoft.h"
@@ -669,6 +675,12 @@ FissionFeature *FissionFeature::create(const QString &type, QObject *parent) {
     if (type == "Sketch") f = new FissionSketch(parent);
     else if (type == "Extrude") f = new FissionExtrude(parent);
     else if (type == "Revolve") f = new FissionRevolve(parent);
+    else if (type == "Box") f = new FissionBox(parent);
+    else if (type == "Cylinder") f = new FissionCylinder(parent);
+    else if (type == "Sphere") f = new FissionSphere(parent);
+    else if (type == "Torus") f = new FissionTorus(parent);
+    else if (type == "Coil") f = new FissionCoil(parent);
+    else if (type == "Pipe") f = new FissionPipe(parent);
     else if (type == "Fillet") f = new FissionFillet(parent);
     else if (type == "Chamfer") f = new FissionChamfer(parent);
     else if (type == "Loft") f = new FissionLoft(parent);
@@ -739,7 +751,8 @@ FissionFeature *FissionFeature::fromJson(const QJsonObject &obj, QObject *parent
 }
 
 QStringList FissionFeature::types() {
-    return {"Sketch", "Extrude", "Revolve", "Fillet", "Chamfer", "Loft", "Sweep", "Shell", "Mirror",
+    return {"Sketch", "Extrude", "Revolve", "Box", "Cylinder", "Sphere", "Torus", "Coil", "Pipe",
+            "Fillet", "Chamfer", "Loft", "Sweep", "Shell", "Mirror",
             "RectangularPattern", "CircularPattern", "ConstructionPlane", "ConstructionAxis", "ConstructionPoint",
             "Hole", "Thread", "Combine", "Move", "Scale", "SplitBody", "SplitFace", "OffsetFace", "Offset",
             "ReplaceFace", "Draft", "Joint", "PathPattern", "Rib", "Web", "Remove", "DeleteFace", "InsertMesh", "MeshConvert", "MeshReverse",
