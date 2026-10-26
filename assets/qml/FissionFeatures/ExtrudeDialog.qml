@@ -14,6 +14,8 @@ FeatureDialog {
         { kind: "choice", label: "Operation", key: "operation", options: operations },
         { kind: "selection", label: "Objects", key: "targets", sel: "bodies", filter: "body,face",
           when: p => p.operation !== "newBody" },
-        { kind: "note", text: "Objects: bodies to combine with (empty = every body the tool touches)." }
+        { kind: "note", text: "Click a face to pull it. Shift-click or Ctrl-click adds another face to the same pull. "
+                              + "Click a different face to set the distance out to that face. "
+                              + "Objects: bodies to combine with (empty = every body the tool touches)." }
     ]
 }

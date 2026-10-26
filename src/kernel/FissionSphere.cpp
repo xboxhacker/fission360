@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "FissionSphere.h"
+#include "FissionSolidTools.h"
 #include <BRepPrimAPI_MakeSphere.hxx>
 
 QVariantMap FissionSphere::defaults() const {
     return {{"diameter", "50"},
-            {"origin", QVariantList{0.0, 0.0, 0.0}},
-            {"operation", "join"}, {"targets", QVariantList()}};
+            {"plane", ""}, {"origin", QVariantList{0.0, 0.0, 0.0}},
+            {"operation", "newBody"}, {"targets", QVariantList()}};
 }
 
 bool FissionSphere::compute(RebuildContext &ctx) {
@@ -14,14 +15,12 @@ bool FissionSphere::compute(RebuildContext &ctx) {
     if (!number(ctx, "diameter", dia)) return false;
     if (dia <= 0) return fail("Sphere diameter must be greater than zero");
 
-    const QVariantList o = list("origin");
-    gp_Pnt center(o.size() >= 3 ? o.at(0).toDouble() : 0.0,
-                  o.size() >= 3 ? o.at(1).toDouble() : 0.0,
-                  o.size() >= 3 ? o.at(2).toDouble() : 0.0);
-
-    TopoDS_Shape sphere = BRepPrimAPI_MakeSphere(center, dia / 2.0).Shape();
-    if (sphere.IsNull()) return fail("Sphere failed");
-
+    gp_Ax3 frame, base;
     QString err;
+    if (!primitiveFrame(ctx, get("plane"), list("origin"), frame, err, &base)) return fail(err);
+
+    TopoDS_Shape sphere = placeOnFrame(BRepPrimAPI_MakeSphere(dia / 2.0).Shape(), frame);
+    if (sphere.IsNull()) return fail("Sphere failed");
+    setHandles(base, {{frame.Location(), frame.XDirection(), "diameter", dia, 0.5}});
     return ctx.applyOperation(sphere, operation(), list("targets"), id(), err) || fail(err);
 }

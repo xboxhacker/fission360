@@ -258,6 +258,8 @@ ColumnLayout {
             if (r !== undefined) {
                 if (spec.autoNext && JSON.stringify(props[spec.key]) !== JSON.stringify(r)) Qt.callLater(() => activateNext(spec))
                 o[spec.key] = r
+                if (spec.placeStart && JSON.stringify(props[spec.key]) !== JSON.stringify(r))
+                    Qt.callLater(() => releaseForStartPoint())
             }
             break
         }
@@ -318,6 +320,17 @@ ColumnLayout {
         if (Array.isArray(v) || typeof v === "string") return v.length > 0
         if (typeof v === "number") return v >= 0
         return true
+    }
+
+    // The plane is chosen. The next click on it sets the primitive's start point.
+    function releaseForStartPoint() {
+        activeKey = ""
+        setInputFeature("")
+        if (app && app.selection) {
+            app.selection.filter = ""
+            app.selection.clear()
+        }
+        fissionApp.showMessage("Click a point on the plane to place the solid")
     }
 
     function activateFirst() {

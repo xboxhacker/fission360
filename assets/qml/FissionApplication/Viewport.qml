@@ -1051,18 +1051,48 @@ Item {
         function onInspectModeChanged() { vp.repaintManip() }
     }
 
-    // Screen geometry of the handle: base, tip and a unit screen direction for the arrow head
-    function manipScreen() {
-        if (!manip) return null
-        const tipW = manip.origin.plus(manip.direction.times(manip.value))
-        const o = r.projectPoint(manip.origin), t = r.projectPoint(tipW)
-        const ahead = r.projectPoint(tipW.plus(manip.direction.times(r.snapStep() * 4)))
+    // Primary arrow plus any extra arrows (box width / length / depth, and the other primitives)
+    function arrowDefs() {
+        if (!manip || manip.key === undefined) return []
+        const primary = { origin: manip.origin, direction: manip.direction, key: manip.key,
+                          value: manip.value, scale: manip.scale || 1 }
+        return [primary].concat(manip.arrows || [])
+    }
+    function asVec(v) {
+        if (!v) return null
+        if (v.plus) return v
+        if (v.length === 3) return Qt.vector3d(v[0], v[1], v[2])
+        return Qt.vector3d(v.x, v.y, v.z)
+    }
+    // Screen geometry of one arrow: base, tip and a unit screen direction for the head
+    function arrowScreen(a) {
+        if (!a) return null
+        const origin = asVec(a.origin), direction = asVec(a.direction)
+        if (!origin || !direction) return null
+        const scale = a.scale || 1
+        const shown = a.value * scale
+        const tipW = origin.plus(direction.times(shown))
+        const o = r.projectPoint(origin), t = r.projectPoint(tipW)
+        const ahead = r.projectPoint(tipW.plus(direction.times(r.snapStep() * 4)))
         if (!o.length || !t.length || !ahead.length) return null
         let dx = ahead[0] - t[0], dy = ahead[1] - t[1]
         const len = Math.hypot(dx, dy)
         if (len < 1e-6) { dx = 0; dy = -1 } else { dx /= len; dy /= len }
-        if (manip.value < 0) { dx = -dx; dy = -dy }
+        if (shown < 0) { dx = -dx; dy = -dy }
         return { o: o, t: t, d: [dx, dy], handle: [t[0] + dx * 10, t[1] + dy * 10] }
+    }
+    function manipScreen() { return arrowScreen(arrowDefs()[0]) }
+    property int manipHotIndex: 0
+    function arrowAt(x, y) {
+        const arrows = arrowDefs()
+        let best = -1, bestD = 14
+        for (let i = 0; i < arrows.length; ++i) {
+            const s = arrowScreen(arrows[i])
+            if (!s) continue
+            const d = Math.hypot(x - s.handle[0], y - s.handle[1])
+            if (d < bestD) { bestD = d; best = i }
+        }
+        return best
     }
     // Place the distance value box so it never covers the arrow head or the taper knob
     function manipBoxPos(bw, bh) {
@@ -1111,13 +1141,21 @@ Item {
     function nearManip(x, y) {
         // Draft: only the angle knob is interactive (the pull arrow is a guide)
         if (app.commandFeature && app.commandFeature.type === "Draft") return false
-        const s = manipScreen()
-        return !!s && Math.hypot(x - s.handle[0], y - s.handle[1]) < 14
+        const i = arrowAt(x, y)
+        if (i < 0) return false
+        manipHotIndex = i
+        return true
     }
     function beginManipDrag(x, y) {
-        const t = r.axisParameter(x, y, manip.origin, manip.direction)
+        const arrows = arrowDefs()
+        const i = arrowAt(x, y)
+        const a = arrows[i < 0 ? 0 : i]
+        if (!a) return false
+        const origin = asVec(a.origin), direction = asVec(a.direction)
+        const t = r.axisParameter(x, y, origin, direction)
         if (t === undefined) return false
-        manipDrag = { origin: manip.origin, direction: manip.direction, key: manip.key, offset: manip.value - t }
+        const scale = a.scale || 1
+        manipDrag = { origin: origin, direction: direction, key: a.key, offset: a.value * scale - t, scale: scale }
         return true
     }
 
@@ -1321,7 +1359,13 @@ Item {
             p = [w.x, w.y, w.z].map(v => Math.round(v / step) * step)
         }
         const unitDigits = app.lengthUnit === "mm" ? 3 : 4
-        app.commandFeature.set(m.key, p.map(v => app.lenText(v, unitDigits)))
+        let stored = p.map(v => app.lenText(v, unitDigits))
+        if (m.x && m.y && m.planeOrigin) {
+            const d = Qt.vector3d(p[0], p[1], p[2]).minus(m.planeOrigin)
+            stored = [app.lenText(d.dotProduct(m.x), unitDigits), app.lenText(d.dotProduct(m.y), unitDigits),
+                      app.lenText(0, unitDigits)]
+        }
+        app.commandFeature.set(m.key, stored)
         manipCanvas.requestPaint()
     }
 
@@ -1353,12 +1397,13 @@ Item {
         if (t === undefined) return
         const step = Math.max(0.01, r.snapStep() / 2)
         let v = Math.round((t + manipDrag.offset) / step) * step
+        v = v / (manipDrag.scale || 1)
         // Extrude distance and an offset construction plane may cross through zero.
         // Every other arrow stays a positive length.
         const signed = (f.type === "Extrude" && manipDrag.key === "distance")
                     || (f.type === "OffsetFace" && manipDrag.key === "distance")
                     || (f.type === "ConstructionPlane" && manipDrag.key === "offset")
-        if (!signed) v = Math.max(step, v)
+        if (!signed) v = Math.max(manipDrag.key === "innerDiameter" ? 0 : step, v)
         // Like Fusion: dragging an extrude into the body turns Join into Cut, and back out again
         if (f.type === "Extrude" && manipDrag.key === "distance" && app.hasSolidBefore(f.id)) {
             const op = f.get("operation")
@@ -1382,6 +1427,45 @@ Item {
 
     // ------------------------------------------------------------------ mouse
 
+    function tryPrimitiveStart(x, y, mods) {
+        const f = app.commandFeature
+        if (!f || (mods & (Qt.ControlModifier | Qt.ShiftModifier))) return false
+        if (["Box", "Cylinder", "Sphere", "Torus", "Coil", "Pipe"].indexOf(f.type) < 0) return false
+        if (app.selection.filter === "face,plane") return false
+        const plane = f.get("plane")
+        if (!plane) return false
+        const fr = app.doc.planeFrame(plane)
+        if (!fr || !fr.ok) return false
+        const origin = Qt.vector3d(fr.origin[0], fr.origin[1], fr.origin[2])
+        const n = Qt.vector3d(fr.normal[0], fr.normal[1], fr.normal[2])
+        const w = r.planePoint(x, y, origin, n)
+        if (w === undefined) return false
+        const d = Qt.vector3d(w.x, w.y, w.z).minus(origin)
+        const xAx = Qt.vector3d(fr.x[0], fr.x[1], fr.x[2])
+        const yAx = Qt.vector3d(fr.y[0], fr.y[1], fr.y[2])
+        const digits = app.lengthUnit === "mm" ? 3 : 4
+        f.set("origin", [app.lenText(d.dotProduct(xAx), digits), app.lenText(d.dotProduct(yAx), digits), app.lenText(0, digits)])
+        fissionApp.showMessage("Start point set")
+        return true
+    }
+    function tryExtrudeFace(ref, mods) {
+        const f = app.commandFeature
+        if (!f || f.type !== "Extrude" || !ref || ref.kind !== "face") return false
+        const add = mods & (Qt.ControlModifier | Qt.ShiftModifier)
+        const profiles = f.get("profiles") || []
+        const pulling = profiles.length > 0 && typeof profiles[0] === "object"
+        if (add) { app.selection.toggle(ref); return true }
+        if (!pulling) { app.selection.select(ref, false); return true }
+        const already = profiles.some(p => p.body === ref.body && p.index === ref.index)
+        if (already) return true
+        const dist = app.doc.pullDistance(profiles[0], ref)
+        if (!dist || !dist.ok) return false
+        f.set("flip", false)
+        f.set("extent", "distance")
+        f.set("distance", app.lenText(dist.distance, app.lengthUnit === "mm" ? 3 : 4))
+        fissionApp.showMessage("Extrude distance set from the face")
+        return true
+    }
     function click(x, y, mods) {
         if (app.activeSketchId && !pts.length && !cpicks.length) {
             const hit = annotationAt(x, y)
@@ -1396,6 +1480,8 @@ Item {
             if (pl) app.createSketch(pl)
             return
         }
+        if (tryPrimitiveStart(x, y, mods)) return
+        if (tryExtrudeFace(ref, mods)) return
         const measuring = app.inspectMode === "measure"
         const additive = (mods & (Qt.ControlModifier | Qt.ShiftModifier)) || app.commandFeatureId.length > 0
         if (ref.kind === undefined) {
@@ -1968,7 +2054,11 @@ Item {
             }
             const hot = vp.manipHover || vp.manipDrag
             const draftOnly = vp.app.commandFeature && vp.app.commandFeature.type === "Draft"
-            if (!draftOnly) paintArrow(vp.manipScreen(), hot && !(vp.manipDrag && vp.manipDrag.section))
+            if (!draftOnly) {
+                const arrows = vp.arrowDefs()
+                for (let i = 0; i < arrows.length; ++i)
+                    paintArrow(vp.arrowScreen(arrows[i]), hot && vp.manipHotIndex === i && !(vp.manipDrag && vp.manipDrag.section))
+            }
             paintArrow(vp.sectionScreen(), hot && (!vp.manipDrag || vp.manipDrag.section))
 
             const as = vp.angleScreen()
@@ -2026,61 +2116,87 @@ Item {
         }
     }
 
-    // Value of the handle; edits go straight into the feature (expressions allowed)
-    Rectangle {
-        id: manipBox
-        readonly property var s: (vp.camRev, vp.width, vp.height, vp.manip, vp.manipScreen())
-        readonly property var pos: (s, vp.angleScreen(), width, height, vp.manipBoxPos(width, height))
-        readonly property string expr: (vp.app.rev, vp.manip && vp.app.commandFeature) ? String(vp.app.commandFeature.get(vp.manip.key)) : ""
-        visible: !!vp.manip && !!s && !(vp.app.commandFeature && vp.app.commandFeature.type === "Draft")
-        x: pos ? pos.x : 0
-        y: pos ? pos.y : 0
-        width: 120
-        height: 26
-        radius: 3
-        color: "white"
-        border.color: Theme.manipulator
-        onExprChanged: if (!manipField.activeFocus) manipField.text = expr
-        TextInput {
-            id: manipField
-            anchors.fill: parent
-            anchors.leftMargin: 6
-            anchors.rightMargin: 6
-            verticalAlignment: TextInput.AlignVCenter
-            font.pixelSize: 12
-            color: Theme.text
-            selectByMouse: true
-            clip: true
-            onTextEdited: manipCommit.restart()
-            onActiveFocusChanged: if (!activeFocus) text = manipBox.expr
-            Keys.onEscapePressed: (e) => { manipCommit.stop(); text = manipBox.expr; vp.forceActiveFocus(); e.accepted = true }
-        }
-        Timer {
-            id: manipCommit
-            interval: 350
-            onTriggered: manipBox.commit()
-        }
-        function commit() {
-            const f = vp.app.commandFeature
-            if (!f || !vp.manip) return
-            const kind = vp.app.inputKind(vp.manip.key)
-            const text = vp.app.withUnit(manipField.text, kind)
-            const r = vp.app.doc.evaluateExpression(text)
-            if (!r.error) f.set(vp.manip.key, text)
+    readonly property var manipArrows: (manip, app.rev, arrowDefs())
+    // One value box per arrow; edits go straight into the feature (expressions allowed)
+    Repeater {
+        id: manipRepeater
+        model: vp.manipArrows
+        Rectangle {
+            id: box
+            required property var modelData
+            required property int index
+            readonly property var screen: (vp.camRev, vp.width, vp.height, vp.arrowScreen(modelData))
+            readonly property var pos: {
+                if (!screen) return null
+                if (index === 0) return vp.manipBoxPos(width, height)
+                return {
+                    x: Math.max(4, Math.min(screen.handle[0] + 18, vp.width - width - 4)),
+                    y: Math.max(4, Math.min(screen.handle[1] - height / 2 + index * 4, vp.height - height - 4))
+                }
+            }
+            readonly property string expr: (vp.app.rev, vp.app.commandFeature) ? String(vp.app.commandFeature.get(modelData.key)) : ""
+            visible: !!screen && !(vp.app.commandFeature && vp.app.commandFeature.type === "Draft")
+            x: pos ? pos.x : 0
+            y: pos ? pos.y : 0
+            z: 8
+            width: 108
+            height: 26
+            radius: 3
+            color: "white"
+            border.color: Theme.manipulator
+            onExprChanged: if (!field.activeFocus) field.text = expr
+            TextInput {
+                id: field
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                verticalAlignment: TextInput.AlignVCenter
+                font.pixelSize: 12
+                color: Theme.text
+                selectByMouse: true
+                clip: true
+                onTextEdited: commitTimer.restart()
+                onActiveFocusChanged: if (!activeFocus) text = box.expr
+                Keys.onEscapePressed: (e) => { commitTimer.stop(); text = box.expr; vp.forceActiveFocus(); e.accepted = true }
+            }
+            Timer {
+                id: commitTimer
+                interval: 350
+                onTriggered: box.commit()
+            }
+            function commit() {
+                const f = vp.app.commandFeature
+                if (!f) return
+                const text = vp.app.withUnit(field.text, vp.app.inputKind(modelData.key))
+                const ev = vp.app.doc.evaluateExpression(text)
+                if (!ev.error) f.set(modelData.key, text)
+            }
+            function flush() {
+                if (!commitTimer.running) return
+                commitTimer.stop()
+                commit()
+            }
+            function replace(ch) {
+                field.forceActiveFocus()
+                field.text = ch
+                commitTimer.restart()
+            }
+            Component.onCompleted: field.text = expr
         }
     }
     // First keystroke replaces the value; further keys go to the focused box as usual
     function typeIntoManip(ch) {
-        if (!manip || !manipBox.visible) return false
-        manipField.forceActiveFocus()
-        manipField.text = ch
-        manipCommit.restart()
+        const i = manipHover ? manipHotIndex : 0
+        const box = manipRepeater.itemAt(i) || manipRepeater.itemAt(0)
+        if (!box || !box.visible) return false
+        box.replace(ch)
         return true
     }
     function flushManip() {
-        if (!manipCommit.running) return
-        manipCommit.stop()
-        manipBox.commit()
+        for (let i = 0; i < manipRepeater.count; ++i) {
+            const box = manipRepeater.itemAt(i)
+            if (box) box.flush()
+        }
     }
 
     // Dimension input next to the cursor while drawing; Tab moves between fields, Enter commits

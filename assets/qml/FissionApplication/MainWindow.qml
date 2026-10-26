@@ -694,6 +694,11 @@ ApplicationWindow {
             if (b.length) p.body = b[0]
             break
         }
+        case "Box": case "Cylinder": case "Sphere": case "Torus": case "Coil": case "Pipe": {
+            const pl = planeRef(selectedOf("face")[0] || selectedOf("plane")[0] || selectedOf("originplane")[0])
+            if (pl) p.plane = pl
+            break
+        }
         }
         return p
     }

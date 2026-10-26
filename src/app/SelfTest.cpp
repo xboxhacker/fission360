@@ -62,6 +62,8 @@
 #include <IFSelect_ReturnStatus.hxx>
 #include <Quantity_Color.hxx>
 #include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
+#include <Poly_Triangulation.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <STEPControl_Writer.hxx>
 #include <TopoDS_Compound.hxx>
@@ -3625,6 +3627,105 @@ void testCurvedBodyTools() {
     }
 }
 
+void testPrimitives() {
+    auto span = [](const FissionDocument &doc, int body, double &dx, double &dy, double &dz) {
+        double a, b, c, d, e, f;
+        GeomUtils::boundingBox(doc.body(body)->shape()).Get(a, b, c, d, e, f);
+        dx = d - a; dy = e - b; dz = f - c;
+    };
+    {
+        FissionDocument doc;
+        auto *pipe = doc.addFeature("Pipe", {{"plane", "XY"}, {"outerDiameter", "30"}, {"innerDiameter", "20"},
+                                             {"length", "50"}, {"operation", "newBody"}});
+        const double pipeVol = M_PI * (15.0 * 15.0 - 10.0 * 10.0) * 50.0;
+        double dx, dy, dz;
+        span(doc, 0, dx, dy, dz);
+        check(pipe->isHealthy() && near(totalVolume(&doc), pipeVol, 1e-2)
+                  && near(dx, 30, 1e-3) && near(dy, 30, 1e-3) && near(dz, 50, 1e-3),
+              "primitive: pipe is a hollow cylinder, not a disk",
+              QString("%1  %2 x %3 x %4").arg(status(&doc)).arg(dx).arg(dy).arg(dz));
+    }
+    {
+        FissionDocument doc;
+        auto *cyl = doc.addFeature("Cylinder", {{"plane", "XY"}, {"diameter", "20"}, {"height", "40"},
+                                                {"operation", "newBody"}});
+        double dx, dy, dz;
+        span(doc, 0, dx, dy, dz);
+        check(cyl->isHealthy() && near(totalVolume(&doc), M_PI * 100.0 * 40.0, 1e-2)
+                  && near(dx, 20, 1e-3) && near(dz, 40, 1e-3),
+              "primitive: cylinder uses diameter then height", status(&doc));
+    }
+    {
+        FissionDocument doc;
+        auto *coil = doc.addFeature("Coil", {{"plane", "XY"}, {"diameter", "40"}, {"tubeDiameter", "8"},
+                                             {"pitch", "10"}, {"height", "50"}, {"operation", "newBody"}});
+        const double r = 20, pitch = 10, turns = 5, tubeR = 4;
+        const double len = turns * std::sqrt((2 * M_PI * r) * (2 * M_PI * r) + pitch * pitch);
+        const double vol = len * M_PI * tubeR * tubeR;
+        const bool built = coil->isHealthy() && doc.body(0);
+        const TopoDS_Shape coilShape = built ? doc.body(0)->shape() : TopoDS_Shape();
+        if (built) BRepMesh_IncrementalMesh(coilShape, 0.05);
+        double xmin = 1e100, ymin = 1e100, zmin = 1e100, xmax = -1e100, ymax = -1e100, zmax = -1e100, maxR = 0;
+        for (TopExp_Explorer ex(coilShape, TopAbs_FACE); ex.More(); ex.Next()) {
+            TopLoc_Location loc;
+            const Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(TopoDS::Face(ex.Current()), loc);
+            if (tri.IsNull()) continue;
+            for (int i = 1; i <= tri->NbNodes(); ++i) {
+                const gp_Pnt p = tri->Node(i).Transformed(loc.Transformation());
+                xmin = std::min(xmin, p.X()); xmax = std::max(xmax, p.X());
+                ymin = std::min(ymin, p.Y()); ymax = std::max(ymax, p.Y());
+                zmin = std::min(zmin, p.Z()); zmax = std::max(zmax, p.Z());
+                maxR = std::max(maxR, std::hypot(p.X(), p.Y()));
+            }
+        }
+        const double dx = xmax - xmin, dy = ymax - ymin, dz = zmax - zmin;
+        check(coil->isHealthy() && near(totalVolume(&doc), vol, vol * 0.04)
+                  && near(dx, 48, 0.35) && near(dy, 48, 0.35) && near(maxR, 24, 0.2) && dz > 54 && dz < 62,
+              "primitive: coil is a round helical tube",
+              QString("%1  mesh %2 x %3 x %4 maxR %5 vol %6 want %7").arg(status(&doc)).arg(dx).arg(dy).arg(dz)
+                  .arg(maxR).arg(totalVolume(&doc)).arg(vol));
+    }
+    {
+        FissionDocument doc;
+        auto *boxF = doc.addFeature("Box", {{"plane", "XZ"}, {"width", "10"}, {"length", "20"}, {"depth", "30"},
+                                            {"operation", "newBody"}});
+        double dx, dy, dz;
+        span(doc, 0, dx, dy, dz);
+        check(boxF->isHealthy() && near(dx, 10, 1e-4) && near(dy, 30, 1e-4) && near(dz, 20, 1e-4),
+              "primitive: the solid stands on the selected plane",
+              QString("%1 x %2 x %3 %4").arg(dx).arg(dy).arg(dz).arg(status(&doc)));
+        const QVariantMap handles = boxF->manipulator();
+        check(handles.value("key").toString() == "width" && handles.value("arrows").toList().size() == 2
+                  && handles.value("move").toMap().value("key").toString() == "origin",
+              "primitive: an arrow for each size and a start point on the plane",
+              handles.value("key").toString());
+        auto *bare = doc.addFeature("Sphere", {{"diameter", "10"}, {"operation", "newBody"}});
+        check(!bare->isHealthy() && bare->error().contains("plane"),
+              "primitive: a new solid waits for a plane or face", bare->error());
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        auto *separate = doc.addFeature("Box", {{"plane", "XY"}, {"width", "10"}, {"length", "10"}, {"depth", "10"},
+                                                {"origin", QVariantList{30.0, 0.0, 0.0}}, {"operation", "newBody"}});
+        check(separate->isHealthy() && doc.bodyCount() == 2, "primitive: New keeps a separate body", status(&doc));
+        auto *joined = doc.addFeature("Box", {{"plane", "XY"}, {"width", "10"}, {"length", "10"}, {"depth", "10"},
+                                              {"origin", QVariantList{5.0, 0.0, 0.0}}, {"operation", "join"}});
+        check(joined->isHealthy() && doc.bodyCount() == 2, "primitive: Join fuses into the body it overlaps", status(&doc));
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        box(&doc, 30, 0, 10, 10, 20);
+        const QVariantMap from = faceAt(&doc, 0, [](const gp_Pnt &p) { return near(p.Z(), 10, 1e-4); });
+        const QVariantMap to = faceAt(&doc, 1, [](const gp_Pnt &p) { return near(p.Z(), 20, 1e-4); });
+        const QVariantMap d = doc.pullDistance(from, to);
+        check(d.value("ok").toBool() && near(d.value("distance").toDouble(), 10, 1e-3),
+              "extrude: a second face sets the pull distance",
+              QString::number(d.value("distance").toDouble()));
+    }
+}
+
 }   // namespace
 
 namespace SelfTest {
@@ -3637,6 +3738,7 @@ int run() {
     testJoinMultiProfileExtrude();
     testProfilesWithHoles();
     testFilletChamferShell();
+    testPrimitives();
     testRevolveLoftSweep();
     testPatternsAndMirror();
     testFacePatternCut();

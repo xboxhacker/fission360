@@ -11,7 +11,21 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — **1.13.42** is the current GitHub release ([v1.13.42](https://github.com/xboxhacker/fission360/releases/tag/v1.13.42)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — **1.13.44** is the current GitHub release ([v1.13.44](https://github.com/xboxhacker/fission360/releases/tag/v1.13.44)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+
+### 1.13.44 — Extrude to a face, primitive arrows and start point
+- Extrude: the first face is the one that moves. Shift-click or Ctrl-click adds another face to that pull. A plain click on a different face sets the distance out to that face.
+- A primitive shows an arrow for each size, with a text box on the arrow. The cross at the start drags along the plane.
+- After the plane is chosen, the next click places the start point anywhere on that plane. Start U, V and W in the dialog are that point, measured on the plane.
+- Create-menu icons for the cylinder, sphere, torus, coil and pipe are filled drawings of those solids.
+
+### 1.13.43 — Primitive placement, icons, coil and pipe
+- **New** and **Join** are separate operations. New always adds a body. Join fuses with the solid it overlaps. Cut and Intersect are unchanged.
+- A primitive starts by asking for a plane or a flat face (XY, XZ, YZ, a construction plane, or a face). It stands on that plane. Offset is measured on the plane.
+- Create-menu icons for Box, Cylinder, Sphere, Torus, Coil and Pipe each draw that solid.
+- **Coil** sweeps a round tube on a helical spine with a corrected Frenet frame, so each turn stays a circle. A fixed binormal had flattened the tube where the helix ran along it.
+- **Pipe** is a hollow cylinder: outer diameter, inner diameter and length. The cylinder builder takes radius then height.
+- **Cylinder** uses the same radius-then-height order, so a 20 mm diameter, 40 mm tall cylinder is that size.
 
 ### 1.13.42 — Primitive solid bodies (Box, Cylinder, Sphere, Torus, Coil, Pipe)
 - Six new **SOLID CREATE** tools, each with a live spec dialog to tune its parameters:

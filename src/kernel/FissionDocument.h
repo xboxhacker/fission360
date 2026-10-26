@@ -150,6 +150,8 @@ public:
     Q_INVOKABLE bool isPlanarFace(const QVariantMap &faceRef) const;
     // {ok, origin: [x, y, z], normal: [x, y, z]} of "XY" / "XZ" / "YZ", an originplane, plane or planar face ref
     Q_INVOKABLE QVariantMap planeFrame(const QVariant &ref) const;
+    // Signed distance along the outward normal of `fromFace` to `toFace` (its plane, or the clicked point).
+    Q_INVOKABLE QVariantMap pullDistance(const QVariant &fromFace, const QVariant &toFace) const;
 
     // --- Analyses ---
     QVariantList analyses() const { return m_analyses; }

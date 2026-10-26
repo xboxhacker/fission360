@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "FissionPipe.h"
+#include "FissionSolidTools.h"
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
-#include <gp_Trsf.hxx>
 
 QVariantMap FissionPipe::defaults() const {
     return {{"innerDiameter", "20"}, {"outerDiameter", "30"}, {"length", "50"},
-            {"origin", QVariantList{0.0, 0.0, 0.0}},
-            {"operation", "join"}, {"targets", QVariantList()}};
+            {"plane", ""}, {"origin", QVariantList{0.0, 0.0, 0.0}},
+            {"operation", "newBody"}, {"targets", QVariantList()}};
 }
 
 bool FissionPipe::compute(RebuildContext &ctx) {
@@ -21,20 +20,24 @@ bool FissionPipe::compute(RebuildContext &ctx) {
     if (in >= out) return fail("Pipe inner diameter must be smaller than outer diameter");
     if (in < 0) return fail("Pipe inner diameter must be zero or positive");
 
-    const QVariantList o = list("origin");
-    const gp_Vec v(o.size() >= 3 ? o.at(0).toDouble() : 0.0,
-                   o.size() >= 3 ? o.at(1).toDouble() : 0.0,
-                   o.size() >= 3 ? o.at(2).toDouble() : 0.0);
-    gp_Trsf trsf;
-    trsf.SetTranslation(v);
-
-    TopoDS_Shape outer = BRepBuilderAPI_Transform(BRepPrimAPI_MakeCylinder(len, out / 2.0).Shape(), trsf).Shape();
-    TopoDS_Shape inner = in > 0
-        ? BRepBuilderAPI_Transform(BRepPrimAPI_MakeCylinder(len, in / 2.0).Shape(), trsf).Shape()
-        : TopoDS_Shape();
-    TopoDS_Shape pipe = inner.IsNull() ? outer : BRepAlgoAPI_Cut(outer, inner).Shape();
-    if (pipe.IsNull()) return fail("Pipe cut failed");
-
+    gp_Ax3 frame, base;
     QString err;
+    if (!primitiveFrame(ctx, get("plane"), list("origin"), frame, err, &base)) return fail(err);
+
+    // MakeCylinder takes radius, then height. The bore is a hair longer so the cut goes through both ends.
+    TopoDS_Shape outer = BRepPrimAPI_MakeCylinder(out / 2.0, len).Shape();
+    TopoDS_Shape pipe = outer;
+    if (in > 0) {
+        const gp_Ax2 bore(gp_Pnt(0, 0, -0.05), gp_Dir(0, 0, 1));
+        TopoDS_Shape inner = BRepPrimAPI_MakeCylinder(bore, in / 2.0, len + 0.1).Shape();
+        BRepAlgoAPI_Cut cut(outer, inner);
+        if (!cut.IsDone()) return fail("Pipe cut failed");
+        pipe = cut.Shape();
+    }
+    pipe = placeOnFrame(pipe, frame);
+    if (pipe.IsNull()) return fail("Pipe placement failed");
+    setHandles(base, {{frame.Location(), frame.XDirection(), "outerDiameter", out, 0.5},
+                      {frame.Location(), frame.YDirection(), "innerDiameter", in, 0.5},
+                      {frame.Location(), frame.Direction(), "length", len}});
     return ctx.applyOperation(pipe, operation(), list("targets"), id(), err) || fail(err);
 }

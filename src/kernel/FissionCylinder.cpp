@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) FissionCAD contributors
 #include "FissionCylinder.h"
+#include "FissionSolidTools.h"
 #include <BRepPrimAPI_MakeCylinder.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
-#include <gp_Trsf.hxx>
 
 QVariantMap FissionCylinder::defaults() const {
     return {{"diameter", "50"}, {"height", "50"},
-            {"origin", QVariantList{0.0, 0.0, 0.0}},
-            {"operation", "join"}, {"targets", QVariantList()}};
+            {"plane", ""}, {"origin", QVariantList{0.0, 0.0, 0.0}},
+            {"operation", "newBody"}, {"targets", QVariantList()}};
 }
 
 bool FissionCylinder::compute(RebuildContext &ctx) {
@@ -17,17 +16,14 @@ bool FissionCylinder::compute(RebuildContext &ctx) {
     if (!number(ctx, "height", h)) return false;
     if (dia <= 0 || h <= 0) return fail("Cylinder diameter and height must be greater than zero");
 
-    const QVariantList o = list("origin");
-    const gp_Vec v(o.size() >= 3 ? o.at(0).toDouble() : 0.0,
-                   o.size() >= 3 ? o.at(1).toDouble() : 0.0,
-                   o.size() >= 3 ? o.at(2).toDouble() : 0.0);
-
-    TopoDS_Shape cyl = BRepPrimAPI_MakeCylinder(h, dia / 2.0).Shape();
-    gp_Trsf trsf;
-    trsf.SetTranslation(v);
-    cyl = BRepBuilderAPI_Transform(cyl, trsf).Shape();
-    if (cyl.IsNull()) return fail("Cylinder failed");
-
+    gp_Ax3 frame, base;
     QString err;
+    if (!primitiveFrame(ctx, get("plane"), list("origin"), frame, err, &base)) return fail(err);
+
+    // Radius, then height. The axis is the plane normal.
+    TopoDS_Shape cyl = placeOnFrame(BRepPrimAPI_MakeCylinder(dia / 2.0, h).Shape(), frame);
+    if (cyl.IsNull()) return fail("Cylinder failed");
+    setHandles(base, {{frame.Location(), frame.XDirection(), "diameter", dia, 0.5},
+                      {frame.Location(), frame.Direction(), "height", h}});
     return ctx.applyOperation(cyl, operation(), list("targets"), id(), err) || fail(err);
 }

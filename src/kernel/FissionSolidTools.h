@@ -5,7 +5,15 @@
 #include "FissionTransform.h"
 #include <QList>
 #include <TopoDS_Face.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Pln.hxx>
+
+// Plane the primitive stands on, shifted by its local origin (u, v along the plane, w along the normal).
+// An empty plane ref fails: a new primitive waits until a plane or flat face is chosen.
+bool primitiveFrame(RebuildContext &ctx, const QVariant &planeRef, const QVariantList &origin,
+                    gp_Ax3 &placed, QString &error, gp_Ax3 *base = nullptr);
+// Moves a solid built on the XY plane (Z up) onto `frame`.
+TopoDS_Shape placeOnFrame(const TopoDS_Shape &shape, const gp_Ax3 &frame);
 
 // Move `faces` of `solid` by `distance` along their outward normals. A round chamfer is pulled
 // (its size changes, or it comes off). Other faces, flat or curved, are offset by OCCT, or else the slab

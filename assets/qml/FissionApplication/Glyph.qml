@@ -82,6 +82,26 @@ Item {
         poly(c, [[x, y + d], [x + d, y], [x + w + d, y], [x + w, y + d]], true, true)
         poly(c, [[x + w, y + d], [x + w + d, y], [x + w + d, y + h], [x + w, y + d + h]], true, true)
     }
+    // Upright solid of revolution. x, top and bot are centers; rx, ry are the cap radii. hole cuts the top.
+    function roundSolid(c, x, top, bot, rx, ry, hole) {
+        c.beginPath()
+        c.moveTo(x - rx, top)
+        c.lineTo(x - rx, bot)
+        c.lineTo(x + rx, bot)
+        c.lineTo(x + rx, top)
+        c.closePath()
+        c.fill()
+        c.beginPath(); c.ellipse(x, bot, rx, ry); c.stroke()
+        c.beginPath(); c.moveTo(x - rx, top); c.lineTo(x - rx, bot); c.stroke()
+        c.beginPath(); c.moveTo(x + rx, top); c.lineTo(x + rx, bot); c.stroke()
+        c.beginPath(); c.ellipse(x, top, rx, ry); c.fill(); c.stroke()
+        if (hole > 0.4) {
+            c.globalCompositeOperation = "destination-out"
+            c.beginPath(); c.ellipse(x, top, hole, Math.max(0.8, ry * hole / rx)); c.fill()
+            c.globalCompositeOperation = "source-over"
+            c.beginPath(); c.ellipse(x, top, hole, Math.max(0.8, ry * hole / rx)); c.stroke()
+        }
+    }
 
     function draw(c, n) {
         switch (n) {
@@ -863,6 +883,34 @@ Item {
             break
         case "comingsoon":
             circle(c, 12, 12, 9, true); poly(c, [[12, 7], [12, 12], [16, 14]], false, false)
+            break
+        case "cylinder":
+            roundSolid(c, 12, 6, 18, 7, 2.5, 0)
+            break
+        case "sphere":
+            circle(c, 12, 12, 8, true)
+            c.beginPath(); c.ellipse(12, 12, 8, 2.6); c.stroke()
+            c.beginPath(); c.ellipse(12, 12, 2.6, 8); c.stroke()
+            c.beginPath(); c.arc(9, 9, 3, Math.PI, Math.PI * 1.6); c.stroke()
+            break
+        case "torus":
+            c.beginPath(); c.ellipse(12, 12, 8, 4.2); c.fill(); c.stroke()
+            c.globalCompositeOperation = "destination-out"
+            c.beginPath(); c.ellipse(12, 12, 3.4, 1.7); c.fill()
+            c.globalCompositeOperation = "source-over"
+            c.beginPath(); c.ellipse(12, 12, 3.4, 1.7); c.stroke()
+            c.beginPath(); c.ellipse(12, 12, 5.7, 2.9); c.stroke()
+            break
+        case "coil":
+            for (const y of [6.2, 12, 17.8]) {
+                c.beginPath(); c.ellipse(12, y, 6.8, 2.4); c.stroke()
+                c.beginPath(); c.ellipse(12, y, 4.4, 1.3); c.stroke()
+            }
+            poly(c, [[5.2, 6.2], [5.2, 12]], false, false)
+            poly(c, [[18.8, 12], [18.8, 17.8]], false, false)
+            break
+        case "pipe":
+            roundSolid(c, 12, 6, 18, 7, 2.5, 3.1)
             break
         case "body":
         case "box":

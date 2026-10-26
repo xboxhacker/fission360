@@ -1538,6 +1538,25 @@ QVariantMap FissionDocument::planeFrame(const QVariant &refArg) const {
             {"x", QVariantList{x.X(), x.Y(), x.Z()}}, {"y", QVariantList{y.X(), y.Y(), y.Z()}}};
 }
 
+QVariantMap FissionDocument::pullDistance(const QVariant &fromFace, const QVariant &toFace) const {
+    const QVariantMap from = planeFrame(fromFace);
+    if (!from.value("ok").toBool()) return {{"ok", false}};
+    const QVariantList fo = from.value("origin").toList(), fn = from.value("normal").toList();
+    const gp_Pnt origin(fo.value(0).toDouble(), fo.value(1).toDouble(), fo.value(2).toDouble());
+    const gp_Dir normal(fn.value(0).toDouble(), fn.value(1).toDouble(), fn.value(2).toDouble());
+    gp_Pnt target;
+    const QVariantMap to = planeFrame(toFace);
+    if (to.value("ok").toBool()) {
+        const QVariantList p = to.value("origin").toList();
+        target = gp_Pnt(p.value(0).toDouble(), p.value(1).toDouble(), p.value(2).toDouble());
+    } else {
+        const QVariantList hit = toFace.toMap().value("hit").toList();
+        if (hit.size() < 3) return {{"ok", false}};
+        target = gp_Pnt(hit.value(0).toDouble(), hit.value(1).toDouble(), hit.value(2).toDouble());
+    }
+    return {{"ok", true}, {"distance", gp_Vec(origin, target).Dot(gp_Vec(normal))}};
+}
+
 // --- Analyses --------------------------------------------------------------
 
 QString FissionDocument::addAnalysis(const QVariantMap &analysis) {

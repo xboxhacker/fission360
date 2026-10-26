@@ -160,6 +160,12 @@ QtObject {
         case "ContourFlange": return "contourflange"
         case "Unfold": return "unfold"
         case "Refold": return "refold"
+        case "Box": return "box"
+        case "Cylinder": return "cylinder"
+        case "Sphere": return "sphere"
+        case "Torus": return "torus"
+        case "Coil": return "coil"
+        case "Pipe": return "pipe"
         default: return "box"
         }
     }

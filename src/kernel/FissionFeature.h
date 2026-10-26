@@ -14,6 +14,7 @@
 #include <gp_Ax1.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Pnt.hxx>
+#include <initializer_list>
 #include "FissionTypes.h"
 
 class FissionDocument;
@@ -157,8 +158,20 @@ protected:
     FeatureOperation operation() const;
 
     bool fail(const QString &message) { m_error = message; return false; }
-    // value = current numeric value of `key`, measured from origin along direction
-    void setManipulator(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value);
+    // value = current numeric value of `key`, measured from origin along direction.
+    // scale draws the arrow at value * scale (a diameter arrow reaches the surface at 0.5).
+    void setManipulator(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value,
+                        double scale = 1);
+    void addArrow(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value, double scale = 1);
+    // Dimension arrows, plus a start-point handle dragged on `base`. Arrow origins are world points.
+    struct Arrow {
+        gp_Pnt origin;
+        gp_Dir direction;
+        const char *key;
+        double value;
+        double scale = 1;
+    };
+    void setHandles(const gp_Ax3 &base, std::initializer_list<Arrow> arrows);
     // Adds an angle knob to the manipulator (call after setManipulator): a side line from `pivot` along `up`
     // for `height`, leaning against `out` by `degrees` (positive = toward the inside)
     void setAngleManipulator(const gp_Pnt &pivot, const gp_Dir &up, const gp_Dir &out, double height,

@@ -9,7 +9,9 @@ FeatureDialog {
     readonly property var bodyFilter: "body,face"
     readonly property var planeSel: ({ kind: "selection", sel: "plane", filter: "face,plane", presets: planePresets })
 
-    function plane(label, key) { return Object.assign({}, planeSel, { label: label, key: key }) }
+    function plane(label, key, extra) { return Object.assign({}, planeSel, extra || {}, { label: label, key: key }) }
+    readonly property var startField: ({ kind: "vector", label: "Start", key: "origin", labels: ["U", "V", "W"] })
+    readonly property var startNote: ({ kind: "note", text: "Click the plane to set the start point. Drag an arrow, or type in its box, to change a size." })
 
     readonly property var fromSpec: ({ kind: "point3", label: "From point", key: "fromPoint", prompt: "Click the point to move from",
                                        then: "toPoint", when: p => p.moveType === "pointToPoint" || p.moveType === "pointToPosition",
@@ -58,6 +60,8 @@ FeatureDialog {
         if (s) feature.set("size", s.name)
     }
 
+    readonly property var primitiveOp: [["newBody", "New"], ["join", "Join"], ["cut", "Cut"], ["intersect", "Intersect"]]
+
     readonly property var specs: ({
         Hole: [
             { kind: "selection", label: "Face", key: "face", sel: "face", filter: "face", hitKey: "center",
@@ -102,43 +106,55 @@ FeatureDialog {
             { kind: "note", text: "Pick a cylindrical face (shaft or hole). Empty pitch = ISO metric coarse, empty length = whole face." }
         ],
         Box: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Width", key: "width" },
             { kind: "number", label: "Length", key: "length" },
             { kind: "number", label: "Depth", key: "depth" },
-            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the origin corner" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Cylinder: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Diameter", key: "diameter" },
             { kind: "number", label: "Height", key: "height" },
-            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the base center" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Sphere: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Diameter", key: "diameter" },
-            { kind: "point3", label: "Center", key: "origin", prompt: "Click the center" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Torus: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Inner diameter", key: "innerDiameter" },
             { kind: "number", label: "Tube diameter", key: "tubeDiameter" },
-            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the center" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Coil: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Diameter", key: "diameter" },
             { kind: "number", label: "Tube diameter", key: "tubeDiameter" },
             { kind: "number", label: "Pitch", key: "pitch" },
             { kind: "number", label: "Height", key: "height" },
-            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the start" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Pipe: [
+            sd.plane("Plane", "plane", { placeStart: true }),
             { kind: "number", label: "Outer diameter", key: "outerDiameter" },
             { kind: "number", label: "Inner diameter", key: "innerDiameter" },
             { kind: "number", label: "Length", key: "length" },
-            { kind: "point3", label: "Origin", key: "origin", prompt: "Click the base center" },
-            { kind: "choice", label: "Operation", key: "operation", options: [["join", "New / Join"], ["cut", "Cut"], ["intersect", "Intersect"]] }
+            sd.startField,
+            { kind: "choice", label: "Operation", key: "operation", options: sd.primitiveOp },
+            sd.startNote
         ],
         Combine: [
             { kind: "selection", label: "Target body", key: "target", sel: "body", filter: bodyFilter, autoNext: true },

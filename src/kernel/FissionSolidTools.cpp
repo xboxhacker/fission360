@@ -22,6 +22,7 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Trsf.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepFeat_SplitShape.hxx>
@@ -115,6 +116,41 @@ gp_Dir outwardNormal(const TopoDS_Face &f) {
     if (f.Orientation() == TopAbs_REVERSED) d.Reverse();
     return d;
 }
+
+} // namespace
+
+bool primitiveFrame(RebuildContext &ctx, const QVariant &planeRef, const QVariantList &origin,
+                    gp_Ax3 &placed, QString &error, gp_Ax3 *base) {
+    const bool missing = !planeRef.isValid() || planeRef.isNull()
+        || (planeRef.typeId() == QMetaType::QString && planeRef.toString().trimmed().isEmpty());
+    if (missing) { error = "Select a plane or a flat face"; return false; }
+    gp_Ax3 plane;
+    if (!ctx.resolvePlane(planeRef, plane, error)) return false;
+    auto coord = [&](int i) {
+        if (i >= origin.size()) return 0.0;
+        const QVariant v = origin.at(i);
+        if (v.typeId() == QMetaType::QString) {
+            QString err;
+            const double n = ctx.evaluate(v.toString(), &err);
+            return err.isEmpty() ? n : 0.0;
+        }
+        return v.toDouble();
+    };
+    if (base) *base = plane;
+    gp_Pnt loc = plane.Location();
+    loc.Translate(gp_Vec(plane.XDirection()) * coord(0) + gp_Vec(plane.YDirection()) * coord(1)
+                  + gp_Vec(plane.Direction()) * coord(2));
+    placed = gp_Ax3(loc, plane.Direction(), plane.XDirection());
+    return true;
+}
+
+TopoDS_Shape placeOnFrame(const TopoDS_Shape &shape, const gp_Ax3 &frame) {
+    gp_Trsf trsf;
+    trsf.SetDisplacement(gp_Ax3(), frame);
+    return BRepBuilderAPI_Transform(shape, trsf, Standard_True).Shape();
+}
+
+namespace {
 
 // Replaces body `index` by the solids of `shape`; further lumps become new bodies right after it
 void replaceBody(RebuildContext &ctx, int index, const TopoDS_Shape &shape, const QString &featureId) {

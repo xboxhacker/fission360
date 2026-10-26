@@ -609,11 +609,40 @@ bool FissionFeature::applyFusionSnapshot(RebuildContext &ctx) {
     return true;
 }
 
-void FissionFeature::setManipulator(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value) {
-    m_manipulator = {{"origin", QVector3D(origin.X(), origin.Y(), origin.Z())},
-                     {"direction", QVector3D(direction.X(), direction.Y(), direction.Z())},
+static QVector3D vec3(const gp_XYZ &p) { return QVector3D(p.X(), p.Y(), p.Z()); }
+
+void FissionFeature::setManipulator(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value,
+                                    double scale) {
+    m_manipulator = {{"origin", vec3(origin.XYZ())},
+                     {"direction", vec3(direction.XYZ())},
                      {"key", key},
-                     {"value", value}};
+                     {"value", value},
+                     {"scale", scale}};
+}
+
+void FissionFeature::addArrow(const gp_Pnt &origin, const gp_Dir &direction, const QString &key, double value,
+                              double scale) {
+    QVariantList arrows = m_manipulator.value("arrows").toList();
+    arrows.append(QVariantMap{{"origin", vec3(origin.XYZ())},
+                              {"direction", vec3(direction.XYZ())},
+                              {"key", key},
+                              {"value", value},
+                              {"scale", scale}});
+    m_manipulator["arrows"] = arrows;
+}
+
+void FissionFeature::setHandles(const gp_Ax3 &base, std::initializer_list<Arrow> arrows) {
+    if (arrows.size() == 0) return;
+    auto it = arrows.begin();
+    setManipulator(it->origin, it->direction, QString::fromLatin1(it->key), it->value, it->scale);
+    for (++it; it != arrows.end(); ++it)
+        addArrow(it->origin, it->direction, QString::fromLatin1(it->key), it->value, it->scale);
+    setMoveManipulator(arrows.begin()->origin, base.Direction(), QStringLiteral("origin"), {});
+    QVariantMap move = m_manipulator.value("move").toMap();
+    move["x"] = vec3(base.XDirection().XYZ());
+    move["y"] = vec3(base.YDirection().XYZ());
+    move["planeOrigin"] = vec3(base.Location().XYZ());
+    m_manipulator["move"] = move;
 }
 
 void FissionFeature::setAngleManipulator(const gp_Pnt &pivot, const gp_Dir &up, const gp_Dir &out, double height,
