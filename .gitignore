@@ -1,27 +1,22 @@
-﻿build*/
+build*/
 dist/
 uitest/
 shot_*.png
 *.log
 *_log.txt
-# Autodesk's copyrighted reference material: local only, never pushed
+fission_build*.txt
+occt_*.txt
+
+# Reference material — local only, never pushed
 docs/fusion_*
 docs/external_edits/
 assets/qml/THIRD_PARTY_NOTICES.md
-fission_build*.txt
-occt_*.txt
-build*_log.txt
 
-# Local Qt / build leftovers if someone nests them here
+# Qt / IDE leftovers
 6.8.2/
 *.user
 *.suo
 .vs/
 CMakeUserPresets.json
-
-# Never push local secrets / editor junk
 .env
-**/.env
 .vscode/
-**/.vscode/
-

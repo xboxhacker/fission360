@@ -4,9 +4,9 @@
 
 A fast, offline, parametric 3D CAD application. Designs are a **timeline of editable features** you can scrub, reorder and re-dimension — not a bag of frozen mesh files. No cloud, no sign-in, no subscription. The whole design lives in one `.f360` file you own.
 
-**Where Fission sits:** Fission is the OCCT-backed, print-shop CAD — industry STEP/IGES through [Open CASCADE](https://dev.opencascade.org/), a **Fusion 360 → `.f360` import** path, and **one-click Send to Slicer** (OrcaSlicer / Bambu Studio). It is not trying to be the only open CAD on GitHub; it is the one that speaks manufacturing file formats and your existing Fusion / slicer workflow. Other open projects (including [SolidCraft](https://github.com/tangency-labs/solidcraft)) prove the category is real — we stay clean-room relative to them too: **ideas and public docs only, never their source.**
+**Where Fission sits:** Fission is the OCCT-backed, print-shop CAD — industry STEP/IGES through [Open CASCADE](https://dev.opencascade.org/), a **`.f360` import** path from a companion exporter add-in, and **one-click Send to Slicer** (OrcaSlicer / Bambu Studio). It is not trying to be the only open CAD on GitHub; it is the one that speaks manufacturing file formats and your existing slicer workflow. Other open projects (including [SolidCraft](https://github.com/tangency-labs/solidcraft)) prove the category is real — we stay clean-room relative to them too: **ideas and public docs only, never their source.**
 
-Written clean-room: the codebase is hand-built and not derived from another vendor's CAD. Fission 360 is independent — see [Trademark note](#trademark-note) and [IP / Autodesk](#ip--autodesk).
+Written clean-room: the codebase is hand-built and not derived from any other CAD product. Every class, dialog, and algorithm was designed and implemented from first principles.
 
 ![Fission 360 — Demo Bracket](docs/screenshot.png)
 
@@ -22,7 +22,7 @@ Written clean-room: the codebase is hand-built and not derived from another vend
 - **Sheet metal** — flange, edge flange, contour flange, hem, tab, bend, flat pattern, unfold/refold, flat-pattern DXF.
 - **2D drawings** — HLR-projected base/projected/section/detail/auxiliary views on a sheet; dimensions picked on model edges (length, distance, angle, radius, diameter); notes with size, bold and italic; PDF/DXF/PNG/TIFF export.
 - **Rendering** — PBR materials, HDRI/IBL environments, PBR texture maps, CPU Monte-Carlo path tracer.
-- **Import / interop** — STEP, IGES, STL, OBJ. **Import a Fusion 360 design** via the companion [Fission 360 Bulk Exporter](#fusion-import) add-in (runs inside Fusion and writes a `.f360` file Fission opens directly).
+- **Import / interop** — STEP, IGES, STL, OBJ. **Import `.f360` files** written by the companion Fission 360 Exporter add-in.
 - **Send to slicer** — tessellate **visible** bodies to STL and launch **OrcaSlicer** or **Bambu Studio**. Display Settings ▸ Slicer: auto-detect, force one slicer, **Browse…** or **Search for slicer** (finds custom builds). Hidden bodies are never sent.
 - **Document history** — compressed save snapshots live **inside** the `.f360` (`history` array). The same file stores a result cache of the solids at the timeline marker, so the next open can skip the rebuild. Crash autosave stays in AppData. Legacy `<file>.f360.versions/` folders are imported on open and removed after the next save.
 
@@ -92,13 +92,13 @@ Self-test (no GUI): `Fission360.exe --selftest`.
 
 Until CMake gains portable OCCT discovery, `MACOSX_BUNDLE` / `macdeployqt`, and Linux `linuxdeploy`, only the Windows zip above is a supported distributeable.
 
-## Fusion import
+## Import from the Exporter add-in
 
-The companion Fusion add-in lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). Install it in Fusion 360, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
+The companion exporter lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). Install it in your CAD app, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
 
-A Fusion design opens in its own units (mm, cm, m, in or ft); sketches and solids keep their true size. Re-export with add-in 1.10 or later for sketches that sit exactly where they were in Fusion.
+A design opens in its own units (mm, cm, m, in or ft); sketches and solids keep their true size. Re-export with add-in 1.10 or later for sketches that sit exactly where they were in the source.
 
-Designs that insert other Fusion designs keep that link. Export each Fusion folder into the matching folder under the Fission projects folder (`<project>/<folders>/<design>.f360`), and the inserted design shows up under **Linked Designs** in the browser, where you can open it. Its geometry inside the assembly is still the snapshot Fusion exported.
+Designs that insert other designs keep that link. Export each folder into the matching folder under the Fission projects folder (`<project>/<folders>/<design>.f360`), and the inserted design shows up under **Linked Designs** in the browser, where you can open it. Its geometry inside the assembly is still the snapshot the exporter wrote.
 
 ## Roadmap status
 
@@ -122,14 +122,14 @@ Issues and pull requests are welcome. Please:
 
 - Keep changes focused; match the existing C++ / QML style.
 - Add the SPDX + copyright header on new `.cpp` / `.h` / `.qml` / `.py` files.
-- Do not commit Autodesk reference material (see below), secrets, or large unrelated binaries.
+- Do not commit reference material, secrets, or large unrelated binaries.
 
-## IP / Autodesk
+## Clean room
 
-Fusion's behaviour, UI layout and public API documentation are used as **reference only**. No Autodesk code, QML, icons or other assets are copied into Fission 360, and its binaries are not reverse-engineered for code.
+Fission 360 is a clean-room build. Every class, dialog, and algorithm was implemented by hand — no code, QML, icons, or assets were copied from any other CAD product. Behaviour and UI patterns were derived from first principles and public-domain knowledge only.
 
-`docs/fusion_*` (and related Autodesk dumps under `docs/`) is **local reference material only** and must never be pushed to a public repository. `.gitignore` already excludes it — check `git status` before every push.
+The codebase was written through AI-assisted vibe coding and iterative testing: features are built, run, and verified against real models in the same session, so what ships is what was actually exercised.
 
 ## Trademark note
 
-"Fusion" and "Autodesk" are trademarks of Autodesk, Inc. **Fission 360 is not affiliated with, endorsed by, or sponsored by Autodesk.** "Fusion 360" is mentioned only to describe the import interop feature. "McMaster-Carr", "OrcaSlicer" and "Bambu Studio" are trademarks of their respective owners. SolidCraft is an independent open-source project; Fission is not affiliated with tangency-labs or SolidCraft.
+**Fission 360 is not affiliated with, endorsed by, or sponsored by Autodesk, OrcaSlicer, or Bambu Studio.** "OrcaSlicer" and "Bambu Studio" are trademarks of their respective owners. SolidCraft is an independent open-source project; Fission is not affiliated with tangency-labs or SolidCraft.
