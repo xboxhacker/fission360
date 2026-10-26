@@ -11,7 +11,7 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — **1.13.35** is the current GitHub release ([v1.13.35](https://github.com/xboxhacker/fission360/releases/tag/v1.13.35)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — **1.13.41** is the current GitHub release ([v1.13.41](https://github.com/xboxhacker/fission360/releases/tag/v1.13.41)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
 ### 1.13.41 — Shell, Offset Face, Draft and Thread on imported, curved bodies
 - **Shell works on the 4KG Spool Hub** (revolved hub with slots and chamfers, 0.3 mm walls): 7–9 of 9 faces and the hollow body, up to 15 s. 1.13.40 managed 0/9 and 0/1, and ran up to 42 s.
