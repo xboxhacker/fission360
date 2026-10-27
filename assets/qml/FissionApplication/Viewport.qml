@@ -31,7 +31,11 @@ Item {
     // Sketch modify tools: picked curve indices (offset chain, first fillet line)
     readonly property bool modifyTool: ["trim", "extend", "offset", "fillet", "project"].indexOf(app.sketchTool) >= 0
     property var mpicks: []
-    readonly property bool sketchInputActive: pts.length > 0 || cpicks.length > 0 || mpicks.length > 0
+    // Offset (O): after a curve is picked, drag this arrow for a signed distance (+ out / − in)
+    // {chain, ou, ov, du, dv, dist, circular}
+    property var offsetManip: null
+    property var offsetDrag: null   // {base, startDist} while dragging the arrow
+    readonly property bool sketchInputActive: pts.length > 0 || cpicks.length > 0 || mpicks.length > 0 || !!offsetManip
     // Drag of sketch geometry or a dimension label (no tool active)
     property var sdrag: null
 
@@ -104,10 +108,115 @@ Item {
         chainFirst = chainPrev = -1
         cpicks = []
         if (mpicks.length) { mpicks = []; app.selection.clear() }
+        offsetManip = null
+        offsetDrag = null
         dimLocks = []
         dimTexts = []
         preview.requestPaint()
     }
+
+    // Midpoint and unit normal in sketch UV for the offset arrow (+dir = grow / outside)
+    function offsetAxis(chain) {
+        const s = app.activeSketch
+        if (!s || !chain || !chain.length) return null
+        const e = chain[0]
+        const ent = s.entity(e) || {}
+        const t = ent.type
+        const num = k => { const v = parseFloat(ent[k]); return isFinite(v) ? v : 0 }
+        if (t === "line") {
+            const x1 = num("x1"), y1 = num("y1"), x2 = num("x2"), y2 = num("y2")
+            const lx = x2 - x1, ly = y2 - y1, L = Math.hypot(lx, ly) || 1
+            return { ou: (x1 + x2) / 2, ov: (y1 + y2) / 2, du: -ly / L, dv: lx / L, circular: false }
+        }
+        if (t === "circle" || t === "arc" || t === "polygon" || t === "ellipse") {
+            const ou = num("cx"), ov = num("cy")
+            let r = num("r")
+            if (t === "ellipse") r = Math.max(num("rx"), num("ry"))
+            if (!(r > 1e-9)) r = 1
+            return { ou: ou + r, ov: ov, du: 1, dv: 0, circular: true, cx: ou, cy: ov }
+        }
+        if (t === "slot") {
+            const x1 = num("x1"), y1 = num("y1"), x2 = num("x2"), y2 = num("y2"), w = num("w")
+            const lx = x2 - x1, ly = y2 - y1, L = Math.hypot(lx, ly) || 1
+            const nx = -ly / L, ny = lx / L
+            return { ou: (x1 + x2) / 2 + nx * w / 2, ov: (y1 + y2) / 2 + ny * w / 2, du: nx, dv: ny, circular: false }
+        }
+        const hs = (s.handles() || []).filter(h => h.entity === e)
+        if (!hs.length) return null
+        const a = hs[0], b = hs[hs.length - 1]
+        const ou = (a.u + b.u) / 2, ov = (a.v + b.v) / 2
+        const lx = b.u - a.u, ly = b.v - a.v, L = Math.hypot(lx, ly) || 1
+        return { ou: ou, ov: ov, du: -ly / L, dv: lx / L, circular: false }
+    }
+
+    function startOffsetManip(chain) {
+        const axis = offsetAxis(chain)
+        if (!axis) return
+        const ev = app.doc.evaluateExpression(app.sketchOffsetDistance)
+        const dist = (!ev.error && Math.abs(ev.value) > 1e-9) ? Math.abs(ev.value) : 2
+        offsetManip = Object.assign({ chain: chain.slice(), dist: dist }, axis)
+        mpicks = chain.slice()
+        highlightCurves(mpicks)
+        fissionApp.showMessage("Drag the arrow for offset distance (+/−), then click to place")
+        preview.requestPaint()
+    }
+
+    function commitOffset() {
+        const m = offsetManip
+        if (!m || !m.chain || !m.chain.length) return
+        const dist = Math.abs(m.dist)
+        if (dist < 1e-9) { fissionApp.showMessage("Offset distance must not be zero"); return }
+        app.sketchOffsetDistance = app.lenText(dist)
+        // Tip of the arrow is the side sample (outside when dist > 0, inside when dist < 0)
+        const su = m.ou + m.du * m.dist
+        const sv = m.ov + m.dv * m.dist
+        const chain = m.chain
+        offsetManip = null
+        offsetDrag = null
+        mpicks = []
+        app.selection.clear()
+        sketchEdit(() => app.activeSketch.offsetEntities(chain, dist, su, sv),
+                   "That geometry can't be offset by " + app.sketchOffsetDistance)
+        preview.requestPaint()
+    }
+
+    function nearOffsetArrow(x, y) {
+        const m = offsetManip
+        if (!m || !app.activeSketchId) return false
+        const tip = r.projectSketch(app.activeSketchId, [[m.ou + m.du * m.dist, m.ov + m.dv * m.dist]])
+        if (!tip.length) return false
+        return Math.hypot(x - tip[0][0], y - tip[0][1]) < 14
+    }
+
+    function beginOffsetDrag(x, y) {
+        if (!nearOffsetArrow(x, y) || !offsetManip) return false
+        offsetDrag = { startDist: offsetManip.dist }
+        return true
+    }
+
+    function moveOffsetDrag(x, y) {
+        const m = offsetManip
+        if (!m || !offsetDrag) return
+        const p = r.sketchPoint(x, y, app.activeSketchId, false)
+        if (p.u === undefined) return
+        let dist
+        if (m.circular && m.cx !== undefined) {
+            // Signed: outside positive, inside negative
+            const r0 = Math.hypot(m.ou - m.cx, m.ov - m.cy)
+            const r1 = Math.hypot(p.u - m.cx, p.v - m.cy)
+            dist = r1 - r0
+        } else {
+            dist = (p.u - m.ou) * m.du + (p.v - m.ov) * m.dv
+        }
+        const step = Math.max(0.01, r.snapStep() / 2)
+        dist = Math.round(dist / step) * step
+        if (Math.abs(dist) < step / 2) dist = dist < 0 ? -step : step
+        offsetManip = Object.assign({}, m, { dist: dist })
+        app.sketchOffsetDistance = app.lenText(Math.abs(dist))
+        preview.requestPaint()
+    }
+
+    function endOffsetDrag() { offsetDrag = null }
 
     // ------------------------------------------------------------------ typed sketch dimensions
 
@@ -500,19 +609,14 @@ Item {
                        tool === "trim" ? "That curve can't be trimmed" : "Nothing to extend to")
             return
         case "offset": {
-            if (!mpicks.length) {
-                if (e < 0) { fissionApp.showMessage("Select a curve or loop to offset"); return }
-                const chain = s.chainOf(e)
-                mpicks = chain.length ? chain : [e]
-                highlightCurves(mpicks)
+            if (offsetManip) {
+                // A click away from the arrow places the offset at the current distance
+                if (!nearOffsetArrow(x, y)) commitOffset()
                 return
             }
-            const d = app.doc.evaluateExpression(app.sketchOffsetDistance)
-            if (d.error || Math.abs(d.value) < 1e-9) { fissionApp.showMessage("Offset distance: " + (d.error || "must not be zero")); return }
-            const chain = mpicks
-            mpicks = []
-            app.selection.clear()
-            sketchEdit(() => s.offsetEntities(chain, Math.abs(d.value), p.u, p.v), "That geometry can't be offset by " + app.sketchOffsetDistance)
+            if (e < 0) { fissionApp.showMessage("Select a curve or loop to offset"); return }
+            const chain = s.chainOf(e)
+            startOffsetManip(chain.length ? chain : [e])
             return
         }
         case "fillet": {
@@ -548,7 +652,9 @@ Item {
         switch (app.sketchTool) {
         case "trim": return "Click a curve piece to trim, or drag to paint-delete curves"
         case "extend": return "Click near the end of a line or arc to extend it"
-        case "offset": return mpicks.length ? "Click the side to offset to (" + app.sketchOffsetDistance + ")" : "Select a curve or loop to offset"
+        case "offset": return offsetManip
+            ? ("Drag the arrow (+/−), then click to place (" + app.lenValue(Math.abs(offsetManip.dist)) + ")")
+            : "Select a curve or loop to offset"
         case "fillet": return mpicks.length ? "Select the second line" : "Select the first line of the corner (R " + app.sketchFilletRadius + ")"
         case "project": return "Select body edges or faces to project onto the sketch"
         }
@@ -682,7 +788,7 @@ Item {
         midpoint: [["point", "line"], ["line", "point"]],
         symmetric: [["point", "point", "line"]],
         fix: [["point"], ["line"], ["circle"], ["other"]],
-        dimension: [["circle"], ["line", "place"], ["line", "line"], ["line", "point"], ["point", "line"],
+        dimension: [["circle"], ["line"], ["line", "line"], ["line", "point"], ["point", "line"],
                     ["point", "point", "place"]]
     })
     readonly property string constraintType: app.sketchTool === "dimension" ? "dimension"
@@ -693,6 +799,22 @@ Item {
         return t === "line" ? "line" : (t === "circle" || t === "arc") ? "circle" : "other"
     }
     function pickKind(p) { return p.place ? "place" : p.p !== undefined ? "point" : entityKind(p.e) }
+
+    // Driving dimension already on this curve (length, diameter or radius), or -1
+    function existingDimensionOn(cand) {
+        const s = app.activeSketch
+        if (!s || cand.place || cand.e === undefined) return -1
+        const kind = entityKind(cand.e)
+        const n = s.constraintCount
+        for (let i = 0; i < n; ++i) {
+            const c = s.constraint(i)
+            const a = c.a || {}, b = c.b || {}
+            if (kind === "circle" && (c.type === "diameter" || c.type === "radius") && a.e === cand.e) return i
+            if (kind === "line" && c.type === "distance" && a.e === cand.e && b.e === cand.e
+                && ((a.p === "start" && b.p === "end") || (a.p === "end" && b.p === "start"))) return i
+        }
+        return -1
+    }
 
     // Candidate readings of a click: the snapped point first, then the curve under the cursor
     function constraintCandidates(x, y) {
@@ -722,10 +844,28 @@ Item {
 
     function constraintClick(x, y) {
         const type = constraintType
+        // Dimension: clicking a line / circle that already has a size opens its text box
+        if (type === "dimension" && cpicks.length === 0) {
+            for (const cand of constraintCandidates(x, y)) {
+                const idx = existingDimensionOn(cand)
+                if (idx < 0) continue
+                editingConstraint = idx
+                selectedConstraint = idx
+                annoCanvas.requestPaint()
+                return
+            }
+        }
         const kinds = cpicks.map(pickKind)
         for (const cand of constraintCandidates(x, y)) {
             const k = pickKind(cand)
             if (!cand.place && cpicks.some(p => !p.place && p.e === cand.e && p.p === cand.p)) continue
+            // A lone line is length; Shift keeps it open so a second line can set angle / distance
+            if (type === "dimension" && kinds.length === 0 && k === "line" && !(mouse.modifiers & Qt.ShiftModifier)) {
+                cpicks = []
+                createConstraint(type, [cand])
+                preview.requestPaint()
+                return
+            }
             const st = signatureState(type, kinds.concat([k]))
             if (!st.prefix) continue
             const picks = cpicks.concat([cand])
@@ -755,7 +895,7 @@ Item {
         switch (kinds) {
         case "circle":
             return { type: app.activeSketch.entity(picks[0].e).type === "arc" ? "radius" : "diameter", a: ref(picks[0]) }
-        case "line,place":
+        case "line":
             return { type: "distance", a: { e: picks[0].e, p: "start" }, b: { e: picks[0].e, p: "end" } }
         case "line,point": case "point,line":
             return { type: "pointline", a: ref(picks[kinds === "line,point" ? 1 : 0]), b: ref(picks[kinds === "line,point" ? 0 : 1]) }
@@ -795,15 +935,20 @@ Item {
         app.doc.checkpoint()
         const res = s.addConstraint(c)
         if (!res.ok) { app.doc.undo(); fissionApp.showMessage(res.error); return }
-        if (type === "dimension") editingConstraint = res.index
+        if (type === "dimension") {
+            editingConstraint = res.index
+            selectedConstraint = res.index
+            annoCanvas.requestPaint()
+            Qt.callLater(dimEditor.init)
+        }
     }
 
     function constraintHint() {
         const type = constraintType, n = cpicks.length
         const kinds = cpicks.map(pickKind).join(",")
         if (type === "dimension") {
-            if (n === 0) return "Select a line, circle, arc, or two points to dimension"
-            if (kinds === "line") return "Click to place the length, or select a second line (angle) or a point (distance)"
+            if (n === 0) return "Select a line or circle (type a size), or two points; Shift+line waits for a second line"
+            if (kinds === "line") return "Select a second line (angle or distance), or a point"
             if (kinds === "point") return "Select a second point or a line"
             return "Click to place: above / below = horizontal, beside = vertical"
         }
@@ -985,7 +1130,10 @@ Item {
     Shortcut {
         sequences: ["Return", "Enter"]
         enabled: vp.sketchInputActive
-        onActivated: vp.enterPressed()
+        onActivated: {
+            if (vp.offsetManip) { vp.commitOffset(); return }
+            vp.enterPressed()
+        }
     }
     // Typing a number while drawing goes into the dimension box
     Keys.onPressed: (e) => {
@@ -1037,7 +1185,7 @@ Item {
     property bool manipHover: false
     onManipChanged: {
         // A focused value box would keep swallowing the single-key shortcuts after the command ends
-        if (!manip && manipField.activeFocus) vp.forceActiveFocus()
+        if (!manip) vp.forceActiveFocus()
         if (manipCanvas) manipCanvas.requestPaint()
     }
     onSectionManipChanged: if (manipCanvas) manipCanvas.requestPaint()
@@ -1514,7 +1662,8 @@ Item {
             if (mouse.pressed) return
             const x0 = hoverX, y0 = hoverY
             manipHover = triad.hover(x0, y0) || nearManip(x0, y0) || nearAngle(x0, y0)
-                         || nearSection(x0, y0) || nearMove(x0, y0) || !!planeEdgeAt(x0, y0)
+                         || nearSection(x0, y0) || nearMove(x0, y0) || nearOffsetArrow(x0, y0)
+                         || !!planeEdgeAt(x0, y0)
             if (manipHover) r.clearHover()
             else r.hover(x0, y0)
         })
@@ -1538,9 +1687,9 @@ Item {
         hoverEnabled: true
         property point last
         property point pressPos
-        property int mode: 0          // 1 orbit, 2 pan, 3 click candidate, 4 drag handle, 5 drag sketch item, 6 resize plane,
+            property int mode: 0          // 1 orbit, 2 pan, 3 click candidate, 4 drag handle, 5 drag sketch item, 6 resize plane,
                                       // 7 region selection, 8 move triad, 9 point pick, 10 trim paint-delete,
-                                      // 11 press on a moved body (becomes 8 once dragged)
+                                      // 11 press on a moved body (becomes 8 once dragged), 12 sketch offset arrow
         property int pressMods: 0
         property bool dragged: false
 
@@ -1562,6 +1711,7 @@ Item {
             else if (vp.nearMove(m.x, m.y) && vp.beginMoveDrag()) mode = 4
             else if (vp.nearAngle(m.x, m.y) && vp.beginAngleDrag()) mode = 4
             else if (vp.nearManip(m.x, m.y) && vp.beginManipDrag(m.x, m.y)) mode = 4
+            else if (vp.beginOffsetDrag(m.x, m.y)) mode = 12
             else if (vp.beginSketchPress(m.x, m.y)) mode = 5
             else if (vp.beginPlaneResize(m.x, m.y)) mode = 6
             else mode = 3
@@ -1572,6 +1722,7 @@ Item {
             if (pressed && Math.abs(m.x - pressPos.x) + Math.abs(m.y - pressPos.y) > 4) dragged = true
             if (pressed && mode === 1 && dragged) vp.app.camera.orbit(dx, dy)
             else if (pressed && mode === 2) vp.app.camera.pan(dx, dy, vp.height)
+            else if (pressed && mode === 12) { vp.moveOffsetDrag(m.x, m.y); return }
             else if (pressed && mode === 4) { vp.moveManipDrag(m.x, m.y); return }
             else if (pressed && mode === 8) { triad.move(m.x, m.y, m.modifiers); return }
             else if (pressed && mode === 11) {
@@ -1609,6 +1760,7 @@ Item {
             if (m.button === Qt.RightButton && !dragged) markMenu.openAt(m.x, m.y)
             else if (m.button === Qt.LeftButton && (mode === 3 || mode === 5 || mode === 6 || mode === 11) && !dragged) vp.click(m.x, m.y, m.modifiers)
             if (mode === 4) vp.endManipDrag()
+            if (mode === 12) vp.endOffsetDrag()
             if (mode === 8) triad.end()
             if (mode === 9 && m.button === Qt.LeftButton && !dragged) vp.pickPoint(m.x, m.y)
             if (mode === 5) vp.endSketchDrag()
@@ -1681,6 +1833,39 @@ Item {
                 if (vp.cursor && vp.cursor.snap === "endpoint") {
                     const cp = r.projectSketch(vp.app.activeSketchId, [[vp.cursor.u, vp.cursor.v]])
                     if (cp.length) { c.strokeStyle = Theme.manipulator; c.lineWidth = 2; c.strokeRect(cp[0][0] - 5, cp[0][1] - 5, 10, 10) }
+                }
+                return
+            }
+            // Offset arrow: base on the curve, tip at the signed distance (+/−)
+            if (vp.offsetManip && vp.app.sketchTool === "offset") {
+                const m = vp.offsetManip
+                const pts = r.projectSketch(vp.app.activeSketchId,
+                    [[m.ou, m.ov], [m.ou + m.du * m.dist, m.ov + m.dv * m.dist]])
+                if (pts.length >= 2) {
+                    const a = pts[0], b = pts[1]
+                    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1
+                    const ux = dx / L, uy = dy / L
+                    c.strokeStyle = Theme.manipulator
+                    c.fillStyle = Theme.manipulator
+                    c.lineWidth = 2
+                    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke()
+                    c.beginPath()
+                    c.moveTo(b[0], b[1])
+                    c.lineTo(b[0] - ux * 10 - uy * 4, b[1] - uy * 10 + ux * 4)
+                    c.lineTo(b[0] - ux * 10 + uy * 4, b[1] - uy * 10 - ux * 4)
+                    c.closePath(); c.fill()
+                    c.beginPath(); c.arc(a[0], a[1], 4, 0, Math.PI * 2); c.fill()
+                    c.beginPath(); c.arc(b[0], b[1], 7, 0, Math.PI * 2); c.stroke()
+                    const label = (m.dist < 0 ? "−" : "") + vp.app.lenValue(Math.abs(m.dist))
+                    c.font = "12px 'Segoe UI'"
+                    const tw = c.measureText(label).width + 10
+                    c.fillStyle = "rgba(255,255,255,0.92)"
+                    c.fillRect(b[0] + 12, b[1] - 10, tw, 18)
+                    c.strokeStyle = Theme.manipulator
+                    c.lineWidth = 1
+                    c.strokeRect(b[0] + 12.5, b[1] - 9.5, tw - 1, 17)
+                    c.fillStyle = "#1d2a38"
+                    c.fillText(label, b[0] + 17, b[1] + 3)
                 }
                 return
             }

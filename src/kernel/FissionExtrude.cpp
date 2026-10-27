@@ -9,13 +9,16 @@
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pln.hxx>
+#include <algorithm>
 
 QVariantMap FissionExtrude::defaults() const {
     return {{"sketch", ""}, {"profiles", QVariantList()}, {"extent", "distance"},
             {"distance", "10 mm"}, {"distance2", "10 mm"}, {"taper", "0 deg"},
+            {"startOffset", "0 mm"}, {"to", QVariant()},
             {"flip", false}, {"operation", "join"}, {"targets", QVariantList()}};
 }
 
@@ -114,7 +117,10 @@ bool FissionExtrude::compute(RebuildContext &ctx) {
         setAngleManipulator(pivot, dir, gp_Dir(X), d1, "taper", taper);
     }
 
-    double from = 0, to = d1;
+    double start = 0;
+    if (!str("startOffset").isEmpty() && !number(ctx, "startOffset", start)) return false;
+
+    double from = start, to = start + d1;
     if (extent == "symmetric") {
         from = -d1; to = d1;
     } else if (extent == "twoSides") {
@@ -122,8 +128,42 @@ bool FissionExtrude::compute(RebuildContext &ctx) {
         from = -d2; to = d1;
     } else if (extent == "throughAll") {
         const double all = ctx.modelSize() * 4;
-        to = all;
-        if (operation() == FeatureOperation::Cut) from = 0;
+        from = start;
+        to = start + all;
+        if (operation() == FeatureOperation::Cut) from = start;
+    } else if (extent == "toObject") {
+        // Stop at a face or plane: reach along dir from the profile plane (plus startOffset).
+        // gp_Dir::Dot only takes gp_Dir (it normalizes) — always Dot against gp_XYZ for a length.
+        from = start;
+        auto rayToPlane = [&](const gp_Pnt &loc, const gp_Dir &n) -> bool {
+            const double den = n.Dot(dir);
+            if (std::fabs(den) < 1e-6) return false;
+            to = n.XYZ().Dot(loc.XYZ() - plane.Location().XYZ()) / den;
+            return true;
+        };
+        int body = -1;
+        TopoDS_Face face;
+        QString faceErr;
+        if (ctx.resolveFace(get("to"), body, face, faceErr)) {
+            BRepAdaptor_Surface surf(face);
+            if (surf.GetType() == GeomAbs_Plane) {
+                const gp_Pln pl = surf.Plane();
+                if (!rayToPlane(pl.Location(), pl.Axis().Direction()))
+                    return fail("Target face is parallel to the extrude direction");
+            } else {
+                to = gp_Vec(dir).Dot(gp_Vec(plane.Location(), GeomUtils::faceCentroid(face)));
+            }
+        } else {
+            gp_Ax3 dst;
+            if (!ctx.resolvePlane(get("to"), dst, err))
+                return fail(err.isEmpty() ? QStringLiteral("Select a face or plane to extrude to") : err);
+            if (!rayToPlane(dst.Location(), dst.Direction()))
+                return fail("Target plane is parallel to the extrude direction");
+        }
+        if (to < from) std::swap(from, to);
+        setManipulator(GeomUtils::shapeCentroid(profile), dir, "distance", to - from);
+    } else if (extent != "distance") {
+        return fail("Unknown extrude extent");
     }
     if (std::fabs(to - from) < 1e-7) return fail("Extrude distance is zero");
 

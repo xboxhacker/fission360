@@ -47,3 +47,5 @@ Shell behaviour as of **1.13.35**: planar bodies try OCCT Intersection joins fir
 4. Link the issue here in the covered table.
 
 Re-scan SolidCraft issues periodically when preparing a release; do not vendor their repro files if they look like proprietary user IP.
+
+Latest full re-scan: **2026-10-27** — tracker grew to **4631** issues (from 2542 on 2026-10-21). See [`solidcraft-issue-comparison-2026-10-27.md`](solidcraft-issue-comparison-2026-10-27.md) for delta vs logged verdicts and the refreshed Fission apply list.

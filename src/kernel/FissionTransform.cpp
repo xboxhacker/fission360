@@ -13,6 +13,7 @@
 #include <Bnd_Box.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <TopoDS.hxx>
+#include <QSet>
 #include <algorithm>
 #include <cmath>
 
@@ -204,9 +205,17 @@ bool FissionRectangularPattern::transforms(RebuildContext &ctx, QList<gp_Trsf> &
         if (!countValue(c2, n2)) return fail("Quantity must be between 1 and 1000");
         if (!ctx.resolveAxis(get("direction2"), a2, err)) return fail(err);
     }
+    QSet<QString> skip;
+    for (const QVariant &v : list("skip")) {
+        const QString s = v.toString().trimmed();
+        if (!s.isEmpty()) skip.insert(s);
+    }
     for (int i = 0; i < n1; ++i) {
         for (int j = 0; j < n2; ++j) {
             if (i == 0 && j == 0) continue;
+            if (skip.contains(QStringLiteral("%1,%2").arg(i).arg(j))
+                || skip.contains(QString::number(i * n2 + j)))
+                continue;
             gp_Vec v = gp_Vec(a1.Direction()) * (s1 * i);
             if (twoDirs) v += gp_Vec(a2.Direction()) * (s2 * j);
             gp_Trsf t;

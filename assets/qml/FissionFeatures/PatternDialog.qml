@@ -31,6 +31,8 @@ FeatureDialog {
         { kind: "number", label: "Quantity 2", key: "count2", when: p => !!p.direction2 },
         { kind: "number", label: "Spacing 2", key: "spacing2", when: p => !!p.direction2 },
         { kind: "choice", label: "Operation", key: "operation", options: ops },
-        { kind: "note", text: "Pick hole/pocket faces to Cut patterned openings into the body. Bodies: empty = all." }
+        { kind: "note",
+          text: "Pick hole/pocket faces to Cut patterned openings into the body. Bodies: empty = all. "
+                + "Optional skip list on the feature: [\"1,0\", \"2,1\"] omits those instances." }
     ]
 }

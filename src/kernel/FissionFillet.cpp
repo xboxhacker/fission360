@@ -3,6 +3,7 @@
 #include "FissionFillet.h"
 #include "FissionChamfer.h"
 #include "GeomUtils.h"
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <TopExp.hxx>
@@ -77,6 +78,8 @@ bool FissionFillet::compute(RebuildContext &ctx) {
         if (result.IsNull() || GeomUtils::solids(result).isEmpty() || !std::isfinite(after) || !(after > 1e-9)
             || after > before * 1.01)
             return fail("Fillet failed (radius may be too large for the selected edges)");
+        if (!BRepCheck_Analyzer(result).IsValid())
+            return fail("Fillet produced invalid geometry");
         ctx.bodies[it.key()].shape = result;
         ctx.bodies[it.key()].editedBy = id();
     }
@@ -121,7 +124,16 @@ bool FissionChamfer::compute(RebuildContext &ctx) {
         }
         chamfer.Build();
         if (!chamfer.IsDone()) return fail("Chamfer failed (distance may be too large)");
-        ctx.bodies[it.key()].shape = chamfer.Shape();
+        const TopoDS_Shape result = chamfer.Shape();
+        const double before = GeomUtils::volume(shape);
+        const double after = GeomUtils::volume(result);
+        // Same rule as fillet: a "done" chamfer that grows the solid or leaves no solid is refused
+        if (result.IsNull() || GeomUtils::solids(result).isEmpty() || !std::isfinite(after) || !(after > 1e-9)
+            || after > before * 1.01)
+            return fail("Chamfer failed (distance may be too large)");
+        if (!BRepCheck_Analyzer(result).IsValid())
+            return fail("Chamfer produced invalid geometry");
+        ctx.bodies[it.key()].shape = result;
         ctx.bodies[it.key()].editedBy = id();
     }
     return true;

@@ -465,7 +465,11 @@ Rectangle {
                             glyphColor: modelData.outOfDate ? "#d89a2b" : Theme.accent
                             label: (modelData.name || "Drawing") + (modelData.outOfDate ? "  (out of date)" : "")
                             onClicked: browser.app.openDrawing(modelData.id)
-                            onDoubleClicked: browser.app.openDrawing(modelData.id)
+                            onDoubleClicked: {
+                                if (modelData.outOfDate) browser.app.updateDrawingAsset(modelData.id)
+                                else browser.app.openDrawing(modelData.id)
+                            }
+                            onContextMenu: (x, y) => drawingMenu.openFor(modelData)
                         }
                     }
                 }
@@ -646,6 +650,21 @@ Rectangle {
                     onTriggered: bodyMenu.target.opacity = modelData / 100
                 }
             }
+        }
+    }
+
+    Menu {
+        id: drawingMenu
+        property var target: null
+        function openFor(a) { target = a; popup() }
+        MenuItem {
+            text: "Open"
+            onTriggered: browser.app.openDrawing(drawingMenu.target.id)
+        }
+        MenuItem {
+            text: "Update from Design"
+            enabled: !!drawingMenu.target && drawingMenu.target.outOfDate
+            onTriggered: browser.app.updateDrawingAsset(drawingMenu.target.id)
         }
     }
 

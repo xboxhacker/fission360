@@ -2074,9 +2074,9 @@ QVariantMap BRepRenderer::sketchPoint(double x, double y, const QString &sketchI
     double v = QVector3D::dotProduct(rel, QVector3D(Y.X(), Y.Y(), Y.Z()));
     if (!snap) return {{"u", u}, {"v", v}, {"snap", ""}};
 
-    // Entity points (ends, centres, midpoints) and other curve ends within 10 px. Entity points win ties
-    // so the caller learns which entity / role it snapped to.
-    double best = 10.0;
+    // Entity points (ends, centres, midpoints) and other curve ends. Centres get a wider pick and win
+    // ties so a new circle / ellipse / polygon / center-rectangle can start on another centre.
+    double best = 16.0;
     bool found = false;
     int snapEntity = -2;
     QString snapRole;
@@ -2094,16 +2094,54 @@ QVariantMap BRepRenderer::sketchPoint(double x, double y, const QString &sketchI
         snapRole = role;
     };
     auto onPlane = [&](double pu, double pv) { return O.Translated(gp_Vec(X) * pu + gp_Vec(Y) * pv); };
-    consider(O, -1, "origin", 0);
+    consider(O, -1, "origin", -1.0);
     for (const QVariant &hv : s->handles()) {
         const QVariantMap h = hv.toMap();
-        consider(onPlane(h["u"].toDouble(), h["v"].toDouble()), h["entity"].toInt(), h["role"].toString(), 0);
+        const QString role = h["role"].toString();
+        // Centres and free points outrank rim / mid samples so the orange snap lands on the centre
+        const double bias = (role == QLatin1String("center") || role == QLatin1String("pos")) ? -2.0
+                          : (role == QLatin1String("mid") ? 0.5 : 0.0);
+        consider(onPlane(h["u"].toDouble(), h["v"].toDouble()), h["entity"].toInt(), role, bias);
+    }
+    // Inside a circle / arc / ellipse / polygon: pull to its centre when the cursor is nearer the
+    // centre than the rim (or within 28 px of the centre), so you do not have to hit a tiny mark.
+    const QList<QList<TopoDS_Edge>> &allEdges = s->entityEdges();
+    for (const QVariant &hv : s->handles()) {
+        const QVariantMap h = hv.toMap();
+        if (h["role"].toString() != QLatin1String("center")) continue;
+        const int ei = h["entity"].toInt();
+        const QVariantMap ent = s->entity(ei);
+        const QString t = ent.value(QStringLiteral("type")).toString();
+        if (t != QLatin1String("circle") && t != QLatin1String("ellipse") && t != QLatin1String("arc")
+            && t != QLatin1String("polygon"))
+            continue;
+        const double cx = h["u"].toDouble(), cy = h["v"].toDouble();
+        double rr = ent.value(QStringLiteral("r")).toDouble();
+        if (t == QLatin1String("ellipse"))
+            rr = std::max(ent.value(QStringLiteral("rx")).toDouble(), ent.value(QStringLiteral("ry")).toDouble());
+        if (!(rr > 1e-9) && ei >= 0 && ei < allEdges.size() && !allEdges[ei].isEmpty()) {
+            // Rim of the built edge when the property is still an expression
+            BRepAdaptor_Curve c(allEdges[ei].first());
+            const gp_Pnt rim = c.Value(c.FirstParameter());
+            const gp_Vec rel(O, rim);
+            rr = std::hypot(rel.Dot(gp_Vec(X)) - cx, rel.Dot(gp_Vec(Y)) - cy);
+        }
+        if (!(rr > 1e-9)) continue;
+        const double du = u - cx, dv = v - cy;
+        const double dist = std::hypot(du, dv);
+        if (dist > rr + 1e-9) continue;   // outside the rim: leave ordinary point snap
+        QPointF sp;
+        const gp_Pnt cpt = onPlane(cx, cy);
+        if (!toScreen(m, QVector3D(cpt.X(), cpt.Y(), cpt.Z()), sp)) continue;
+        const double screen = std::hypot(sp.x() - x, sp.y() - y);
+        if (screen < 28.0 || dist < rr * 0.55)
+            consider(cpt, ei, QStringLiteral("center"), -3.0);
     }
     for (const auto &edges : s->entityEdges()) {
         for (const TopoDS_Edge &e : edges) {
             BRepAdaptor_Curve c(e);
-            consider(c.Value(c.FirstParameter()), -2, QString(), 0.5);
-            consider(c.Value(c.LastParameter()), -2, QString(), 0.5);
+            consider(c.Value(c.FirstParameter()), -2, QString(), 1.0);
+            consider(c.Value(c.LastParameter()), -2, QString(), 1.0);
         }
     }
     if (found) {

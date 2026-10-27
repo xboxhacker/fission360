@@ -194,6 +194,36 @@ ApplicationWindow {
         const n = fissionApp.drawingManager.updateDrawingFromDesign(activeDrawing, doc)
         fissionApp.showMessage(n ? ("Drawing updated from design (" + n + " view(s))") : "Drawing update: no views regenerated")
     }
+    // Status bar / browser: refresh every out-of-date drawing linked to this design
+    function updateStaleLinkedOutputs() {
+        if (!doc || !fissionApp.drawingManager) return
+        if (activeDrawing && activeDrawing.outOfDate) {
+            updateActiveDrawingFromDesign()
+            return
+        }
+        const assets = doc.linkedAssets || []
+        let views = 0, drawings = 0
+        for (let i = 0; i < assets.length; ++i) {
+            const a = assets[i]
+            if (!a || !a.outOfDate || a.kind !== "drawing") continue
+            const drawing = fissionApp.drawingManager.drawingById(a.id)
+            if (!drawing) continue
+            views += fissionApp.drawingManager.updateDrawingFromDesign(drawing, doc)
+            ++drawings
+        }
+        if (!drawings) {
+            fissionApp.showMessage("No linked drawings to update")
+            return
+        }
+        fissionApp.showMessage("Updated " + drawings + " drawing(s) from design (" + views + " view(s))")
+    }
+    function updateDrawingAsset(id) {
+        if (!doc || !fissionApp.drawingManager) return
+        const drawing = fissionApp.drawingManager.drawingById(id)
+        if (!drawing) { fissionApp.showMessage("This drawing was not saved with the design"); return }
+        const n = fissionApp.drawingManager.updateDrawingFromDesign(drawing, doc)
+        fissionApp.showMessage(n ? ("Drawing updated from design (" + n + " view(s))") : "Drawing update: no views regenerated")
+    }
     function revertDesignToVersion(versionNumber) {
         if (!doc) return
         if (!doc.revertToVersion(versionNumber))

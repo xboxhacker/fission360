@@ -3724,6 +3724,73 @@ void testPrimitives() {
               "extrude: a second face sets the pull distance",
               QString::number(d.value("distance").toDouble()));
     }
+    {
+        FissionDocument doc;
+        auto *s = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        const int c0 = s->addCircle(20, 10, 8);
+        doc.rebuild();
+        bool centre = false;
+        for (const QVariant &hv : s->handles()) {
+            const QVariantMap h = hv.toMap();
+            if (h.value("entity").toInt() == c0 && h.value("role").toString() == QLatin1String("center")
+                && near(h.value("u").toDouble(), 20) && near(h.value("v").toDouble(), 10))
+                centre = true;
+        }
+        check(centre, "sketch: a circle exposes its centre as a snap handle");
+        const int c1 = s->addCircle(20, 10, 4);
+        const QVariantMap res = s->addConstraint({{"type", "coincident"},
+                                                  {"a", QVariantMap{{"e", c1}, {"p", "center"}}},
+                                                  {"b", QVariantMap{{"e", c0}, {"p", "center"}}}});
+        doc.rebuild();
+        check(res.value("ok").toBool() && s->isHealthy()
+                  && near(num(s->entity(c1), "cx"), 20) && near(num(s->entity(c1), "cy"), 10),
+              "sketch: a new circle can sit on another circle's centre",
+              res.value("error").toString() + " " + s->error());
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 20, 20, 5);
+        auto *pl = doc.addFeature("ConstructionPlane", {{"mode", "offset"}, {"base", "XY"}, {"offset", "25 mm"}});
+        auto *sk = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        sk->addRectangleLines(2, 2, 10, 10);
+        doc.rebuild();
+        auto *ex = doc.addFeature("Extrude", {{"sketch", sk->id()}, {"extent", "toObject"},
+                                              {"to", QStringLiteral("feature:") + pl->id()},
+                                              {"operation", "newBody"}});
+        double dx, dy, dz;
+        span(doc, doc.bodyCount() - 1, dx, dy, dz);
+        check(ex->isHealthy() && near(dz, 25, 1e-2),
+              "extrude: To Object reaches a construction plane",
+              QString("%1 dz=%2").arg(status(&doc)).arg(dz));
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 10, 10, 10);
+        auto *pat = doc.addFeature("RectangularPattern",
+                                   {{"bodies", QVariantList{0}}, {"direction1", "X"}, {"count1", "4"},
+                                    {"spacing1", "15 mm"}, {"operation", "newBody"},
+                                    {"skip", QVariantList{QStringLiteral("1,0")}}});
+        check(pat->isHealthy() && doc.bodyCount() == 3,
+              "pattern: skip omits listed instances",
+              QString("bodies=%1 %2").arg(doc.bodyCount()).arg(status(&doc)));
+    }
+    {
+        FissionDocument doc;
+        box(&doc, 0, 0, 20, 20, 10);
+        box(&doc, 5, 5, 10, 10, 10);   // overlaps body 0
+        doc.body(1)->setVisible(false);
+        auto *sk = qobject_cast<FissionSketch *>(doc.addFeature("Sketch", {{"plane", "XY"}}));
+        sk->addRectangleLines(6, 6, 8, 8);
+        doc.rebuild();
+        const double before = totalVolume(&doc);
+        // Distance taller than both boxes so a join on the visible body alone grows the model;
+        // joining the hidden body too would fuse the two boxes into one (bodyCount → 1).
+        auto *ex = doc.addFeature("Extrude", {{"sketch", sk->id()}, {"distance", "20 mm"},
+                                              {"operation", "join"}});
+        check(ex->isHealthy() && doc.bodyCount() == 2 && totalVolume(&doc) > before + 100,
+              "boolean: empty targets skip hidden bodies",
+              QString("bodies=%1 vol %2→%3 %4").arg(doc.bodyCount()).arg(before).arg(totalVolume(&doc)).arg(status(&doc)));
+    }
 }
 
 }   // namespace

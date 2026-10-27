@@ -11,7 +11,19 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — **1.13.44** is the current GitHub release ([v1.13.44](https://github.com/xboxhacker/fission360/releases/tag/v1.13.44)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — Source **1.13.45**. GitHub release remains [v1.13.44](https://github.com/xboxhacker/fission360/releases/tag/v1.13.44). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+
+### Docs — SolidCraft issue re-scan (2026-10-27)
+- Public tracker comparison: **4631** issues (was 2542 on 2026-10-21). Logged in `docs/solidcraft-issue-comparison-2026-10-27.md`. Same clean-room rule: failure modes only, no SolidCraft source.
+
+### 1.13.45 — Sketch D / offset arrow / SolidCraft apply pass
+- Sketch **D**: click a line or circle to open its size in a text box (an existing dimension is edited; a new one is created). Shift+line still waits for a second line for angle or distance.
+- Sketch centres: circle / arc / ellipse / polygon centres snap with a wider pick; inside the rim the cursor pulls to the centre so a new centre-point tool can start there.
+- Sketch **Offset (O)**: after picking a curve, drag an arrow for signed distance (+/−), then click or Enter to place.
+- Drawing title block no longer shows the light-gray page-size / standard / angle line.
+- Status bar **Linked outputs out of date** is clickable and updates the drawing(s). Browser: right-click a drawing ▸ **Update from Design**.
+- Fixed `Viewport.qml` `manipField is not defined` after the multi-arrow value boxes landed.
+- **SolidCraft apply (clean-room):** fillet/chamfer refuse grown or invalid solids (`BRepCheck`); empty boolean targets skip hidden bodies; Combine shares a 20 s time limit; Extrude **To Object** + **Start offset** (ray distance uses `gp_XYZ` — `gp_Dir::Dot` normalizes and was collapsing every To Object extrude to 1 mm); loft refuses ring sections (holes) instead of filling them, with a 20 s Build limit; rectangular pattern **skip** list.
 
 ### 1.13.44 — Extrude to a face, primitive arrows and start point
 - Extrude: the first face is the one that moves. Shift-click or Ctrl-click adds another face to that pull. A plain click on a different face sets the distance out to that face.

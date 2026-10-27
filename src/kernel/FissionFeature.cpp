@@ -393,9 +393,19 @@ bool RebuildContext::applyOperation(const TopoDS_Shape &tool, FeatureOperation o
     } else {
         Bnd_Box toolBox = GeomUtils::boundingBox(tool);
         toolBox.Enlarge(1e-4);
-        for (int i = 0; i < bodies.size(); ++i)
-            if (!MeshUtils::isMesh(bodies[i].shape) && !toolBox.IsOut(GeomUtils::boundingBox(bodies[i].shape)))
+        // Match by name against the live document bodies so a hidden body is not silently joined / cut
+        auto bodyHidden = [&](const QString &name) {
+            if (!m_doc || name.isEmpty()) return false;
+            for (FissionBody *b : m_doc->bodies())
+                if (b && b->name() == name) return !b->isVisible();
+            return false;
+        };
+        for (int i = 0; i < bodies.size(); ++i) {
+            if (MeshUtils::isMesh(bodies[i].shape)) continue;
+            if (bodyHidden(bodies[i].name)) continue;
+            if (!toolBox.IsOut(GeomUtils::boundingBox(bodies[i].shape)))
                 idx.append(i);
+        }
     }
 
     if (idx.isEmpty()) {

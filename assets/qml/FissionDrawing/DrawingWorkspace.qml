@@ -705,18 +705,6 @@ Item {
                 }
 
                 Text {
-                    anchors.top: parent.top
-                    anchors.right: parent.right
-                    anchors.margins: 6 * sheetCanvas.fitScale
-                    text: (ws.activeSheet ? ws.activeSheet.size : ws.sheetSize)
-                          + " · " + (ws.drawingDoc ? ws.drawingDoc.standard : (ws.standard === 0 ? "ISO" : "ASME"))
-                          + " · " + ((ws.drawingDoc ? ws.drawingDoc.projectionAngle === "first" : ws.projectionAngle === 0) ? "1st" : "3rd")
-                          + " Angle"
-                    font.pixelSize: 10 * sheetCanvas.fitScale
-                    color: "#666"
-                }
-
-                Text {
                     anchors.bottom: parent.bottom
                     anchors.left: parent.left
                     anchors.margins: 6 * sheetCanvas.fitScale

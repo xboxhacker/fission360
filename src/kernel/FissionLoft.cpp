@@ -3,6 +3,7 @@
 #include "FissionLoft.h"
 #include "FissionSketch.h"
 #include "GeomUtils.h"
+#include "TimeLimit.h"
 #include <BRepAdaptor_CompCurve.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -12,6 +13,7 @@
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools.hxx>
+#include <TopExp_Explorer.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <GProp_GProps.hxx>
@@ -349,12 +351,12 @@ bool FissionLoft::compute(RebuildContext &ctx) {
         const QVariantMap s = sections[i].toMap();
         const QString label = QString("Section %1").arg(i + 1);
         TopoDS_Wire wire;
+        TopoDS_Face sectionFace;
         if (s.value("kind").toString() == "face") {
             int body = -1;
-            TopoDS_Face face;
             QString err;
-            if (!ctx.resolveFace(s, body, face, err)) return fail(label + ": " + err);
-            wire = BRepTools::OuterWire(face);
+            if (!ctx.resolveFace(s, body, sectionFace, err)) return fail(label + ": " + err);
+            wire = BRepTools::OuterWire(sectionFace);
         } else {
             auto *sketch = qobject_cast<FissionSketch *>(ctx.feature(s.value("sketch").toString()));
             if (!sketch) return fail(label + ": sketch not found");
@@ -363,9 +365,18 @@ bool FissionLoft::compute(RebuildContext &ctx) {
             if (profile < 0) profile = sketch->defaultProfiles().isEmpty() ? -1 : sketch->defaultProfiles().first();
             if (profile < 0 || profile >= sketch->profileCount())
                 return fail(label + ": sketch '" + sketch->name() + "' has no such profile");
-            wire = BRepTools::OuterWire(sketch->profiles()[profile]);
+            sectionFace = sketch->profiles()[profile];
+            wire = BRepTools::OuterWire(sectionFace);
         }
         if (wire.IsNull()) return fail(label + " has no closed outline");
+        // A ring (profile with a hole) used to loft as a solid disc with no error. Refuse it until
+        // inner wires are lofted as cuts.
+        if (!sectionFace.IsNull()) {
+            int wiresOnFace = 0;
+            for (TopExp_Explorer exp(sectionFace, TopAbs_WIRE); exp.More(); exp.Next()) ++wiresOnFace;
+            if (wiresOnFace > 1)
+                return fail(label + " has a hole — loft of ring sections is not supported yet");
+        }
         wires << wire;
     }
 
@@ -411,7 +422,9 @@ bool FissionLoft::compute(RebuildContext &ctx) {
         BRepOffsetAPI_ThruSections loft(flag("solid", true), flag("ruled"), 1e-6);
         for (const TopoDS_Wire &w : wires) loft.AddWire(w);
         loft.CheckCompatibility(Standard_True);
-        loft.Build();
+        Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(20000);
+        loft.Build(limit->Start());
+        if (limit->expired()) return fail("Loft took longer than 20 s and was stopped");
         if (!loft.IsDone()) return fail("Loft failed (profiles may be incompatible)");
         result = loft.Shape();
     }

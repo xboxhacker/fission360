@@ -340,12 +340,38 @@ bool FissionCombine::compute(RebuildContext &ctx) {
         BRepAlgoAPI_Fuse f;
         f.SetArguments(args);
         f.SetTools(tl);
-        f.Build();
+        f.SetRunParallel(Standard_True);
+        Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(20000);
+        f.Build(limit->Start());
+        if (limit->expired())
+            return fail("Combine took longer than 20 s and was stopped (try fewer tools, or Join as New Body)");
         if (f.IsDone() && !f.HasErrors()) result = f.Shape();
     } else if (op == "cut") {
-        result = cut(t0, GeomUtils::makeCompound(toolShapes));
+        BRepAlgoAPI_Cut c;
+        TopTools_ListOfShape args, tl;
+        args.Append(t0);
+        tl.Append(GeomUtils::makeCompound(toolShapes));
+        c.SetArguments(args);
+        c.SetTools(tl);
+        c.SetRunParallel(Standard_True);
+        Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(20000);
+        c.Build(limit->Start());
+        if (limit->expired())
+            return fail("Combine took longer than 20 s and was stopped");
+        if (c.IsDone() && !c.HasErrors()) result = c.Shape();
     } else {
-        result = common(t0, GeomUtils::makeCompound(toolShapes));
+        BRepAlgoAPI_Common c;
+        TopTools_ListOfShape args, tl;
+        args.Append(t0);
+        tl.Append(GeomUtils::makeCompound(toolShapes));
+        c.SetArguments(args);
+        c.SetTools(tl);
+        c.SetRunParallel(Standard_True);
+        Handle(GeomUtils::TimeLimit) limit = new GeomUtils::TimeLimit(20000);
+        c.Build(limit->Start());
+        if (limit->expired())
+            return fail("Combine took longer than 20 s and was stopped");
+        if (c.IsDone() && !c.HasErrors()) result = c.Shape();
     }
     if (result.IsNull()) return fail("Combine failed");
     result = GeomUtils::unify(result);

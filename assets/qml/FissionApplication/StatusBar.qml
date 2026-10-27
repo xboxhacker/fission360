@@ -101,7 +101,8 @@ Rectangle {
             color: "#ff9b8f"
         }
         Text {
-            // Linked drawings / renders behind the design contentRevision
+            // Linked drawings / renders behind the design contentRevision — click to update
+            id: staleLinks
             readonly property bool stale: {
                 const d = bar.app.doc
                 if (!d) return false
@@ -110,9 +111,14 @@ Rectangle {
                 return d.anyLinkedAssetOutOfDate()
             }
             visible: stale
-            text: "Linked outputs out of date"
+            text: hover.hovered ? "Click to update linked outputs" : "Linked outputs out of date"
             color: "#ffcc80"
             font.pixelSize: 11
+            font.underline: hover.hovered
+            HoverHandler { id: hover }
+            TapHandler {
+                onTapped: bar.app.updateStaleLinkedOutputs()
+            }
         }
         Text {
             text: bar.app.doc ? bar.app.doc.bodies.length + " bodies" : ""

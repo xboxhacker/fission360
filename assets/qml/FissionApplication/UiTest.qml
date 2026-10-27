@@ -416,8 +416,7 @@ Item {
                          "rectangle is four constrained lines tied to the origin",
                          s.entityCount + " curves, " + s.constraintCount + " constraints, dof " + s.degreesOfFreedom())
             app.sketchTool = "dimension"
-            clickSketch(15, 0)     // bottom edge
-            clickSketch(15, -8)    // place the dimension
+            clickSketch(15, 0)     // bottom edge — opens the length text box
             return 700
         },
         () => {
@@ -431,7 +430,6 @@ Item {
         },
         () => {
             clickSketch(40, 10)    // right edge, now at x = 40
-            clickSketch(48, 10)
             app.activeSketch.setConstraintValue(10, "25")
             app.viewport.editingConstraint = -1
             return 800

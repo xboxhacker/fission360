@@ -41,7 +41,9 @@ public:
     QVariantMap defaults() const override {
         return {{"bodies", QVariantList()}, {"faces", QVariantList()}, {"operation", "newBody"},
                 {"direction1", "X"}, {"count1", "3"}, {"spacing1", "20 mm"},
-                {"direction2", ""}, {"count2", "1"}, {"spacing2", "20 mm"}};
+                {"direction2", ""}, {"count2", "1"}, {"spacing2", "20 mm"},
+                // Instance indices to omit: ["1,0", "2,1"] (i along direction1, j along direction2)
+                {"skip", QVariantList()}};
     }
     QStringList expressionKeys() const override { return {"count1", "spacing1", "count2", "spacing2"}; }
 
