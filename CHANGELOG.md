@@ -17,6 +17,11 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 - Public tracker comparison: **4631** issues (was 2542 on 2026-10-21). Logged in `docs/solidcraft-issue-comparison-2026-10-27.md`. Same clean-room rule: failure modes only, no SolidCraft source.
 - `F3D_Bulk_Export/README.md`: short install / modes blurb for the companion exporter add-in.
 
+### Linux build path (in progress)
+- `CMakeLists.txt` finds Qt (`gcc_64` / `CMAKE_PREFIX_PATH`) and system OpenCASCADE on Unix; Windows still uses `FISSION_ORCA_ROOT`. Skips `.rc` / thumbnail DLL / `windeployqt` off Windows.
+- Proven on Debian 13 (`root@192.168.10.150`): Qt 6.8.2 via aqt + `libocct-*-dev` 7.8 → links `build/Fission360`. `--selftest` under xvfb gets through early solid checks then SIGSEGV in later shell work (OCCT 7.8 vs the Windows 7.6-era path — still open).
+- `scripts/package-linux.sh` builds an AppDir + `.tar.gz` (bundles aqt Qt libs; still needs host `libocct`).
+
 ### 1.13.45 — Sketch D / offset arrow / SolidCraft apply pass
 - Sketch **D**: click a line or circle to open its size in a text box (an existing dimension is edited; a new one is created). Shift+line still waits for a second line for angle or distance.
 - Sketch centres: circle / arc / ellipse / polygon centres snap with a wider pick; inside the rim the cursor pulls to the centre so a new centre-point tool can start there.

@@ -338,6 +338,10 @@ QVariantMap McpServer::handleRequest(const QVariantMap &req, FissionApplication 
     return jsonRpcError(id, -32601, QStringLiteral("Method not found: ") + method);
 }
 
+int McpServer::run(FissionApplication *app) {
+    return run(app, Options{});
+}
+
 int McpServer::run(FissionApplication *app, const Options &opts) {
 #ifdef Q_OS_WIN
     _setmode(_fileno(stdin), _O_BINARY);

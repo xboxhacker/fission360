@@ -11,79 +11,121 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 # ---------------------------------------------------------------------------
-# Qt6 (installed via aqtinstall — see Build in the README)
+# Qt6 (aqtinstall — see Build in the README / docs/ci-release-sketch.md)
 # ---------------------------------------------------------------------------
-# Qt lives next to the fission360 folder (shared with the parent workspace)
-set(QT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../6.8.2/msvc2022_64")
-if(NOT EXISTS "${QT_DIR}")
-    set(QT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/6.8.2/msvc2022_64")
-endif()
-if(NOT EXISTS "${QT_DIR}")
-    message(FATAL_ERROR "Qt6 not found at ${CMAKE_CURRENT_SOURCE_DIR}/../6.8.2/msvc2022_64. Install via aqtinstall:\n"
-            "  pip install aqtinstall && aqt install-qt windows desktop 6.8.2 win64_msvc2022_64")
+set(QT_DIR "")
+if(WIN32)
+    foreach(cand
+            "${CMAKE_CURRENT_SOURCE_DIR}/../6.8.2/msvc2022_64"
+            "${CMAKE_CURRENT_SOURCE_DIR}/6.8.2/msvc2022_64")
+        if(EXISTS "${cand}/lib/cmake/Qt6/Qt6Config.cmake")
+            set(QT_DIR "${cand}")
+            break()
+        endif()
+    endforeach()
+    if(NOT QT_DIR)
+        message(FATAL_ERROR "Qt6 not found. Install via aqtinstall:\n"
+                "  pip install aqtinstall && aqt install-qt windows desktop 6.8.2 win64_msvc2022_64")
+    endif()
+else()
+    foreach(cand
+            "$ENV{CMAKE_PREFIX_PATH}"
+            "/opt/Qt/6.8.2/gcc_64"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../6.8.2/gcc_64"
+            "${CMAKE_CURRENT_SOURCE_DIR}/6.8.2/gcc_64"
+            "$ENV{HOME}/Qt/6.8.2/gcc_64")
+        if(cand AND EXISTS "${cand}/lib/cmake/Qt6/Qt6Config.cmake")
+            set(QT_DIR "${cand}")
+            break()
+        endif()
+    endforeach()
+    if(NOT QT_DIR AND DEFINED ENV{Qt6_DIR})
+        get_filename_component(QT_DIR "$ENV{Qt6_DIR}/../../.." ABSOLUTE)
+    endif()
+    if(NOT QT_DIR)
+        message(FATAL_ERROR "Qt6 not found. Install via aqtinstall:\n"
+                "  aqt install-qt linux desktop 6.8.2 linux_gcc_64 -O /opt/Qt -m qtwebengine\n"
+                "  then cmake -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.2/gcc_64 …")
+    endif()
 endif()
 list(APPEND CMAKE_PREFIX_PATH "${QT_DIR}")
+message(STATUS "Qt6: ${QT_DIR}")
 
 find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 Svg Widgets OpenGL OpenGLWidgets Network Test WebEngineQuick)
 find_package(Qt6QuickCompiler QUIET)
 qt_standard_project_setup()
+find_package(OpenGL REQUIRED)
 
 # ---------------------------------------------------------------------------
-# OpenCASCADE (from OrcaSlicer deps)
+# OpenCASCADE
+#   Windows: OrcaSlicer dep build (FISSION_ORCA_ROOT) — existing layout with .lib + OBJECT fill-ins
+#   Unix:    system / OpenCASCADEConfig.cmake (Debian libocct-*-dev, or -DOpenCASCADE_DIR=…)
 # ---------------------------------------------------------------------------
-# Point FISSION_ORCA_ROOT at an OrcaSlicer source checkout whose dependencies have been built (it provides
-# OCCT). Either pass -DFISSION_ORCA_ROOT=<path> or set the FISSION_ORCA_ROOT environment variable;
-# otherwise ../MyOrcaSlicer and %USERPROFILE%/Documents/GitHub/MyOrcaSlicer are tried.
-set(FISSION_ORCA_ROOT "" CACHE PATH "OrcaSlicer checkout with built deps (provides OpenCASCADE)")
-if(NOT FISSION_ORCA_ROOT AND DEFINED ENV{FISSION_ORCA_ROOT})
-    set(FISSION_ORCA_ROOT "$ENV{FISSION_ORCA_ROOT}")
-endif()
-if(NOT FISSION_ORCA_ROOT)
-    foreach(cand "${CMAKE_CURRENT_SOURCE_DIR}/../MyOrcaSlicer" "$ENV{USERPROFILE}/Documents/GitHub/MyOrcaSlicer")
-        if(EXISTS "${cand}/deps/build/dep_OCCT-prefix")
-            set(FISSION_ORCA_ROOT "${cand}")
-            break()
+set(OCCT_INCLUDE_DIR "")
+set(OCCT_EXTRA_INCLUDE_DIRS "")
+set(OCCT_LIBS "")
+set(OCCT_LIBS_DIR "")
+set(OCCT_OBJECT_LIBS "")
+set(FISSION_ORCA_ROOT "" CACHE PATH "OrcaSlicer checkout with built deps (Windows OCCT)")
+
+if(WIN32)
+    if(NOT FISSION_ORCA_ROOT AND DEFINED ENV{FISSION_ORCA_ROOT})
+        set(FISSION_ORCA_ROOT "$ENV{FISSION_ORCA_ROOT}")
+    endif()
+    if(NOT FISSION_ORCA_ROOT)
+        foreach(cand "${CMAKE_CURRENT_SOURCE_DIR}/../MyOrcaSlicer" "$ENV{USERPROFILE}/Documents/GitHub/MyOrcaSlicer")
+            if(EXISTS "${cand}/deps/build/dep_OCCT-prefix")
+                set(FISSION_ORCA_ROOT "${cand}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(OCCT_DIR "${FISSION_ORCA_ROOT}/deps/build/dep_OCCT-prefix/src/dep_OCCT-build")
+    set(OCCT_SRC "${FISSION_ORCA_ROOT}/deps/build/dep_OCCT-prefix/src/dep_OCCT")
+    set(OCCT_FLAT_INCLUDE "${FISSION_ORCA_ROOT}/OrcaSlicer_dep/usr/local/include/occt")
+
+    if(NOT FISSION_ORCA_ROOT OR NOT EXISTS "${OCCT_DIR}" OR NOT EXISTS "${OCCT_SRC}")
+        message(FATAL_ERROR "OCCT not found (looked under '${FISSION_ORCA_ROOT}'). Build OrcaSlicer's deps, then run "
+                "cmake with -DFISSION_ORCA_ROOT=<OrcaSlicer checkout>.")
+    endif()
+
+    set(OCCT_INCLUDE_DIR "${OCCT_FLAT_INCLUDE}" "${OCCT_SRC}/src")
+    file(GLOB OCCT_SUBDIRS "${OCCT_SRC}/src/*")
+    foreach(d ${OCCT_SUBDIRS})
+        if(IS_DIRECTORY "${d}")
+            list(APPEND OCCT_EXTRA_INCLUDE_DIRS "${d}")
         endif()
     endforeach()
+
+    set(OCCT_LIBS_DIR "${OCCT_DIR}/lib/occt")
+    file(GLOB OCCT_LIBS "${OCCT_LIBS_DIR}/*.lib")
+
+    # Toolkits not present as .lib in this OCCT build — compile their sources into the app
+    set(OCCT_MODULE_SRC "${OCCT_SRC}/src")
+    set(OCCT_MISSING_MODULES
+        BRepFill TopOpeBRepTool TopOpeBRepDS TopOpeBRepBuild BRepAlgoAPI BRepCheck BRepLib
+        BRepAlgo BRepFeat LocOpe)
+    foreach(mod ${OCCT_MISSING_MODULES})
+        file(GLOB_RECURSE MOD_SRCS "${OCCT_MODULE_SRC}/${mod}/*.cxx")
+        if(MOD_SRCS)
+            add_library(${mod} OBJECT ${MOD_SRCS})
+            target_include_directories(${mod} PRIVATE ${OCCT_INCLUDE_DIR} ${OCCT_EXTRA_INCLUDE_DIRS})
+            list(APPEND OCCT_OBJECT_LIBS ${mod})
+        endif()
+    endforeach()
+else()
+    find_package(OpenCASCADE REQUIRED)
+    message(STATUS "OpenCASCADE ${OpenCASCADE_MAJOR_VERSION}.${OpenCASCADE_MINOR_VERSION}.${OpenCASCADE_MAINTENANCE_VERSION} at ${OpenCASCADE_INSTALL_PREFIX}")
+    set(OCCT_INCLUDE_DIR ${OpenCASCADE_INCLUDE_DIR})
+    set(OCCT_LIBS_DIR ${OpenCASCADE_LIBRARY_DIR})
+    # Prefer imported targets from the module Target files; else link by short name + LIBRARY_DIR.
+    set(_fission_occt_tks
+        TKernel TKMath TKG2d TKG3d TKGeomBase TKGeomAlgo TKBRep TKTopAlgo TKPrim TKBO TKBool
+        TKFillet TKOffset TKShHealing TKFeat TKMesh TKXSBase TKDE TKDESTEP TKDESTL TKDEIGES
+        TKCAF TKLCAF TKCDF TKXCAF TKBin TKBinL TKBinXCAF TKXml TKXmlL TKXmlXCAF
+        TKService TKV3d TKOpenGl)
+    set(OCCT_LIBS ${_fission_occt_tks})
 endif()
-set(OCCT_DIR "${FISSION_ORCA_ROOT}/deps/build/dep_OCCT-prefix/src/dep_OCCT-build")
-set(OCCT_SRC "${FISSION_ORCA_ROOT}/deps/build/dep_OCCT-prefix/src/dep_OCCT")
-set(OCCT_FLAT_INCLUDE "${FISSION_ORCA_ROOT}/OrcaSlicer_dep/usr/local/include/occt")
-
-if(NOT FISSION_ORCA_ROOT OR NOT EXISTS "${OCCT_DIR}" OR NOT EXISTS "${OCCT_SRC}")
-    message(FATAL_ERROR "OCCT not found (looked under '${FISSION_ORCA_ROOT}'). Build OrcaSlicer's deps, then run "
-            "cmake with -DFISSION_ORCA_ROOT=<OrcaSlicer checkout>.")
-endif()
-
-set(OCCT_INCLUDE_DIR "${OCCT_FLAT_INCLUDE}" "${OCCT_SRC}/src")
-file(GLOB OCCT_SUBDIRS "${OCCT_SRC}/src/*")
-set(OCCT_EXTRA_INCLUDE_DIRS "")
-foreach(d ${OCCT_SUBDIRS})
-    if(IS_DIRECTORY "${d}")
-        list(APPEND OCCT_EXTRA_INCLUDE_DIRS "${d}")
-    endif()
-endforeach()
-
-set(OCCT_LIBS_DIR "${OCCT_DIR}/lib/occt")
-file(GLOB OCCT_LIBS "${OCCT_LIBS_DIR}/*.lib")
-
-# ---------------------------------------------------------------------------
-# Missing OCCT modules built as OBJECT libraries from source
-# ---------------------------------------------------------------------------
-set(OCCT_MODULE_SRC "${OCCT_SRC}/src")
-# Toolkits not present as .lib in this OCCT build — compile their sources into the app
-set(OCCT_MISSING_MODULES
-    BRepFill TopOpeBRepTool TopOpeBRepDS TopOpeBRepBuild BRepAlgoAPI BRepCheck BRepLib
-    BRepAlgo BRepFeat LocOpe)
-set(OCCT_OBJECT_LIBS "")
-foreach(mod ${OCCT_MISSING_MODULES})
-    file(GLOB_RECURSE MOD_SRCS "${OCCT_MODULE_SRC}/${mod}/*.cxx")
-    if(MOD_SRCS)
-        add_library(${mod} OBJECT ${MOD_SRCS})
-        target_include_directories(${mod} PRIVATE ${OCCT_INCLUDE_DIR} ${OCCT_EXTRA_INCLUDE_DIRS})
-        list(APPEND OCCT_OBJECT_LIBS ${mod})
-    endif()
-endforeach()
 
 # ---------------------------------------------------------------------------
 # Source files
@@ -98,38 +140,55 @@ file(GLOB FISSION_TESTS "src/app/SelfTest.cpp" "src/app/UiTestDriver.cpp")
 # ---------------------------------------------------------------------------
 # Executable
 # ---------------------------------------------------------------------------
-# App icon resource in its own target: rc.exe fails with the app's OCCT include list ("filename too long")
-add_library(Fission360Res OBJECT shell/Fission360.rc)
-set_target_properties(Fission360Res PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+set(FISSION_EXTRA_OBJECTS "")
+if(WIN32)
+    # App icon resource in its own target: rc.exe fails with the app's OCCT include list ("filename too long")
+    add_library(Fission360Res OBJECT shell/Fission360.rc)
+    set_target_properties(Fission360Res PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    list(APPEND FISSION_EXTRA_OBJECTS $<TARGET_OBJECTS:Fission360Res>)
+endif()
 
 add_executable(Fission360
     ${FISSION_SRCS}
     ${FISSION_TESTS}
-    $<TARGET_OBJECTS:Fission360Res>
+    ${FISSION_EXTRA_OBJECTS}
 )
 
-# Explorer thumbnail handler for .f360 (plain Win32 + WIC, no Qt); registered by Fission360.exe --register
-add_library(Fission360Thumbs SHARED shell/F360Thumbnail.cpp shell/F360Thumbnail.def)
-set_target_properties(Fission360Thumbs PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
-target_compile_definitions(Fission360Thumbs PRIVATE UNICODE _UNICODE)
-add_dependencies(Fission360 Fission360Thumbs)
+if(WIN32)
+    # Explorer thumbnail handler for .f360 (plain Win32 + WIC, no Qt); registered by Fission360.exe --register
+    add_library(Fission360Thumbs SHARED shell/F360Thumbnail.cpp shell/F360Thumbnail.def)
+    set_target_properties(Fission360Thumbs PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    target_compile_definitions(Fission360Thumbs PRIVATE UNICODE _UNICODE)
+    add_dependencies(Fission360 Fission360Thumbs)
+endif()
+
+set(FISSION_QT_LIBS
+    Qt6::Core Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Test
+)
+set(FISSION_GL_LIBS OpenGL::GL)
+if(WIN32)
+    list(APPEND FISSION_GL_LIBS opengl32 glu32)
+elseif(TARGET OpenGL::GLU)
+    list(APPEND FISSION_GL_LIBS OpenGL::GLU)
+else()
+    list(APPEND FISSION_GL_LIBS GLU)
+endif()
 
 target_include_directories(Fission360 PRIVATE src ${OCCT_INCLUDE_DIR} ${OCCT_EXTRA_INCLUDE_DIRS})
-target_link_directories(Fission360 PRIVATE "${OCCT_LIBS_DIR}")
+if(OCCT_LIBS_DIR)
+    target_link_directories(Fission360 PRIVATE "${OCCT_LIBS_DIR}")
+endif()
 target_link_libraries(Fission360 PRIVATE
     ${OCCT_LIBS}
     ${OCCT_OBJECT_LIBS}
-    Qt6::Core Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Test
-    # Not Qt6::WebEngineQuick: the McMaster dialog's "import QtWebEngine" loads Chromium on first use, and
-    # windeployqt still ships it because it scans the QML imports
-    opengl32 glu32
+    ${FISSION_QT_LIBS}
+    # Not Qt6::WebEngineQuick: the McMaster dialog's "import QtWebEngine" loads Chromium on first use
+    ${FISSION_GL_LIBS}
 )
 
 target_compile_definitions(Fission360 PRIVATE FISSION_VERSION="${PROJECT_VERSION}")
 
-# Python scripts and add-ins (PythonHost): built against CPython's stable ABI (python3.lib, 3.11+), with
-# python3.dll delay-loaded from the user's own Python at run time, so Fission still starts without Python.
-# Without Python headers on the build machine the Scripts dialog says Python support was not built in.
+# Python scripts and add-ins (PythonHost): Windows delay-loads python3.dll from the user's install.
 find_package(Python3 3.11 COMPONENTS Development.Module QUIET)
 if(Python3_Development.Module_FOUND AND WIN32)
     target_include_directories(Fission360 PRIVATE ${Python3_INCLUDE_DIRS})
@@ -139,7 +198,7 @@ if(Python3_Development.Module_FOUND AND WIN32)
     target_link_options(Fission360 PRIVATE "/DELAYLOAD:python3.dll")
     message(STATUS "Python scripting: stable ABI from ${Python3_INCLUDE_DIRS}")
 else()
-    message(STATUS "Python scripting: off (no Python 3.11+ development files found)")
+    message(STATUS "Python scripting: off (no Python 3.11+ development files found, or not Windows)")
 endif()
 set(QT_BIN_DIR "${QT_DIR}/bin")
 
@@ -154,9 +213,7 @@ qt_add_resources(Fission360 "fission_icons"
 )
 
 # QML resources (after the target exists — required by qt_add_resources).
-# Paths are relative to assets/qml via BASE so aliases stay FissionApplication/... under /qml.
 set(FISSION_QML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/qml")
-# The root THIRD_PARTY_NOTICES.md is the single source; a copy is embedded for the About dialog
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${FISSION_QML_DIR}/THIRD_PARTY_NOTICES.md" COPYONLY)
 qt_add_resources(Fission360 "fission_qml"
     PREFIX "/qml"
@@ -229,47 +286,46 @@ qt_add_resources(Fission360 "fission_qml"
 )
 
 # ---------------------------------------------------------------------------
-# Deployment
+# Deployment (Windows copies OCCT DLLs + windeployqt; Linux packaging is scripts/package-linux.sh)
 # ---------------------------------------------------------------------------
-# The dep_OCCT-build/bin/occt tree is incomplete (no TKBRep.dll etc.) while other OCCT DLLs
-# still import those libraries. Prefer the full OrcaSlicer_dep OCCT runtime; fall back to build bin.
-set(OCCT_RUNTIME_DIR "")
-foreach(_cand
-        "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/occt"
-        "${FISSION_ORCA_ROOT}/OrcaSlicer_dep/usr/local/bin/occt"
-        "${OCCT_DIR}/bin/occt")
-    if(EXISTS "${_cand}/TKBRep.dll")
-        set(OCCT_RUNTIME_DIR "${_cand}")
-        break()
+if(WIN32)
+    set(OCCT_RUNTIME_DIR "")
+    foreach(_cand
+            "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/occt"
+            "${FISSION_ORCA_ROOT}/OrcaSlicer_dep/usr/local/bin/occt"
+            "${OCCT_DIR}/bin/occt")
+        if(EXISTS "${_cand}/TKBRep.dll")
+            set(OCCT_RUNTIME_DIR "${_cand}")
+            break()
+        endif()
+    endforeach()
+    if(NOT OCCT_RUNTIME_DIR)
+        set(OCCT_RUNTIME_DIR "${OCCT_DIR}/bin/occt")
+        message(WARNING "Complete OCCT runtime (with TKBRep.dll) not found; using ${OCCT_RUNTIME_DIR}")
     endif()
-endforeach()
-if(NOT OCCT_RUNTIME_DIR)
-    set(OCCT_RUNTIME_DIR "${OCCT_DIR}/bin/occt")
-    message(WARNING "Complete OCCT runtime (with TKBRep.dll) not found; using ${OCCT_RUNTIME_DIR}")
-endif()
-file(GLOB _occt_copy "${OCCT_RUNTIME_DIR}/*.dll")
-# FreeType is required by some OCCT / Qt paths at runtime
-set(_freetype_dll "")
-foreach(_cand
-        "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/freetype.dll"
-        "${FISSION_ORCA_ROOT}/dist/MyOrcaSlicer-portable/freetype.dll"
-        "${FISSION_ORCA_ROOT}/build-portable/src/Release/freetype.dll")
-    if(EXISTS "${_cand}")
-        set(_freetype_dll "${_cand}")
-        break()
+    file(GLOB _occt_copy "${OCCT_RUNTIME_DIR}/*.dll")
+    set(_freetype_dll "")
+    foreach(_cand
+            "${FISSION_ORCA_ROOT}/deps/build/OrcaSlicer_dep/usr/local/bin/freetype.dll"
+            "${FISSION_ORCA_ROOT}/dist/MyOrcaSlicer-portable/freetype.dll"
+            "${FISSION_ORCA_ROOT}/build-portable/src/Release/freetype.dll")
+        if(EXISTS "${_cand}")
+            set(_freetype_dll "${_cand}")
+            break()
+        endif()
+    endforeach()
+    if(_freetype_dll)
+        list(APPEND _occt_copy "${_freetype_dll}")
     endif()
-endforeach()
-if(_freetype_dll)
-    list(APPEND _occt_copy "${_freetype_dll}")
-endif()
 
-add_custom_command(TARGET Fission360 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_occt_copy} $<TARGET_FILE_DIR:Fission360>
-    COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-translations --no-compiler-runtime
-            --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/assets/qml" $<TARGET_FILE:Fission360>
-    COMMENT "Deploying OCCT and Qt runtime from ${OCCT_RUNTIME_DIR}"
-    VERBATIM
-)
+    add_custom_command(TARGET Fission360 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_occt_copy} $<TARGET_FILE_DIR:Fission360>
+        COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-translations --no-compiler-runtime
+                --qmldir "${CMAKE_CURRENT_SOURCE_DIR}/assets/qml" $<TARGET_FILE:Fission360>
+        COMMENT "Deploying OCCT and Qt runtime from ${OCCT_RUNTIME_DIR}"
+        VERBATIM
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Self-test target (no GUI)
@@ -280,10 +336,12 @@ add_executable(FissionSelfTest EXCLUDE_FROM_ALL
 )
 target_compile_definitions(FissionSelfTest PRIVATE SELF_TEST_ONLY=1 FISSION_VERSION="${PROJECT_VERSION}")
 target_include_directories(FissionSelfTest PRIVATE src ${OCCT_INCLUDE_DIR} ${OCCT_EXTRA_INCLUDE_DIRS})
-target_link_directories(FissionSelfTest PRIVATE "${OCCT_LIBS_DIR}")
+if(OCCT_LIBS_DIR)
+    target_link_directories(FissionSelfTest PRIVATE "${OCCT_LIBS_DIR}")
+endif()
 target_link_libraries(FissionSelfTest PRIVATE
     ${OCCT_LIBS}
     ${OCCT_OBJECT_LIBS}
-    Qt6::Core Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Network Qt6::Test
-    opengl32 glu32
+    ${FISSION_QT_LIBS}
+    ${FISSION_GL_LIBS}
 )

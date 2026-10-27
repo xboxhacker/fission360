@@ -19,7 +19,8 @@ public:
     };
 
     // Blocks on stdin until EOF / shutdown. Returns process exit code.
-    static int run(FissionApplication *app, const Options &opts = {});
+    static int run(FissionApplication *app);
+    static int run(FissionApplication *app, const Options &opts);
 
 private:
     static QByteArray readMessage();
