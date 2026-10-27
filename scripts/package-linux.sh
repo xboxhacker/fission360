@@ -15,7 +15,7 @@ for cand in "$BUILD/Fission360" "$BUILD/Release/Fission360"; do
   [[ -x "$cand" ]] && BIN="$cand" && break
 done
 if [[ -z "$BIN" ]]; then
-  echo "error: no Fission360 binary under $BUILD — build Release first." >&2
+  echo "error: no Fission360 binary under $BUILD â€” build Release first." >&2
   exit 1
 fi
 
