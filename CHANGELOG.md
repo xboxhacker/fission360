@@ -11,10 +11,11 @@ Test counts: `--selftest` = kernel regression tests, `--uitest` = scripted UI wa
 
 ---
 
-## [Unreleased] — Source **1.13.45**. GitHub release remains [v1.13.44](https://github.com/xboxhacker/fission360/releases/tag/v1.13.44). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
+## [Unreleased] — **1.13.45** is the current GitHub release ([v1.13.45](https://github.com/xboxhacker/fission360/releases/tag/v1.13.45)). Next: Phase 11 lock server / sync protocol; Phase 12 native CAM toolpaths; leftover Phase 4 analyses + organic mesh convert still open
 
 ### Docs — SolidCraft issue re-scan (2026-10-27)
 - Public tracker comparison: **4631** issues (was 2542 on 2026-10-21). Logged in `docs/solidcraft-issue-comparison-2026-10-27.md`. Same clean-room rule: failure modes only, no SolidCraft source.
+- `F3D_Bulk_Export/README.md`: short install / modes blurb for the companion exporter add-in.
 
 ### 1.13.45 — Sketch D / offset arrow / SolidCraft apply pass
 - Sketch **D**: click a line or circle to open its size in a text box (an existing dimension is edited; a new one is created). Shift+line still waits for a second line for angle or distance.

@@ -95,7 +95,7 @@ Until CMake gains portable OCCT discovery, `MACOSX_BUNDLE` / `macdeployqt`, and 
 
 ## Import from the Exporter add-in
 
-The companion exporter lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). Install it in your CAD app, run the exporter on a design, and open the resulting `.f360` in Fission. Version of the add-in should match the notes in `FISSION_360_PROJECT.md`.
+The companion exporter lives in **`F3D_Bulk_Export/`** in this repo (Python + `.manifest`). See [`F3D_Bulk_Export/README.md`](F3D_Bulk_Export/README.md) for install and modes. Run it on a design, then open the `.f360` in Fission. Add-in version notes: `FISSION_360_PROJECT.md`.
 
 A design opens in its own units (mm, cm, m, in or ft); sketches and solids keep their true size. Re-export with add-in 1.10 or later for sketches that sit exactly where they were in the source.
 
@@ -103,7 +103,7 @@ Designs that insert other designs keep that link. Export each folder into the ma
 
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.44**. Latest GitHub release: **1.13.44** (`Fission360-1.13.44-windows-x64.zip`). Up next: real CAM toolpaths and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.45**. Latest GitHub release: **1.13.45** (`Fission360-1.13.45-windows-x64.zip`). Up next: real CAM toolpaths and optional lock/sync.
 
 MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md). SolidCraft issue recipes: [`docs/solidcraft-issue-parity.md`](docs/solidcraft-issue-parity.md).
 
