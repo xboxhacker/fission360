@@ -1,6 +1,6 @@
 # Fission 360
 
-**Status:** Active development · **Windows** (primary) · GPL-3.0-or-later · not a 1.0 release
+**Status:** Active development · **Windows** (primary) · **Linux** (experimental) · GPL-3.0-or-later · not a 1.0 release
 
 A fast, offline, parametric 3D CAD application. Designs are a **timeline of editable features** you can scrub, reorder and re-dimension — not a bag of frozen mesh files. No cloud, no sign-in, no subscription. The whole design lives in one `.f360` file you own.
 
@@ -35,14 +35,14 @@ A Fission 360 design is a single JSON file with a `.f360` extension. It stores t
 
 - **C++20** kernel and UI glue
 - **Qt 6** (Quick / QML, Quick Shapes, WebEngine, Network) for the UI
-- **Open CASCADE Technology (OCCT) 7.6** as the B-rep modelling kernel (STEP/IGES/STL I/O)
+- **Open CASCADE Technology (OCCT)** as the B-rep modelling kernel (STEP/IGES/STL I/O) — **7.6** via Orca deps on Windows; system **7.8** packages work on Linux
 - **CMake** build system
 
 The UI is QML compiled into the executable — no external QML asset tree to load at runtime.
 
 ## Build (Windows)
 
-Supported and tested on **Windows 10/11** with **Visual Studio 2022** (or Build Tools) and **CMake 3.22+**.
+Supported and tested on **Windows 10/11** with **Visual Studio 2022** (or Build Tools) and **CMake 3.22+**. Windows remains the primary platform.
 
 ### 1. Qt 6.8 (open-source)
 
@@ -84,14 +84,41 @@ That writes `dist/Fission360-<version>-windows-x64/` and a matching `.zip` (exe 
 
 Self-test (no GUI): `Fission360.exe --selftest`.
 
-### macOS / Linux
+## Build (Linux)
 
-**No release builds yet.** Deploy is still Windows-oriented (`/EHa`, `windeployqt`, Orca-deps OCCT paths). A design for native CI packaging is in [`docs/ci-release-sketch.md`](docs/ci-release-sketch.md):
+**Experimental.** Proven on **Debian 13 (trixie)** x86_64 with CMake 3.22+, g++ 14, Ninja, Qt **6.8.2** (aqt), and Debian **libocct-*-dev** (OCCT 7.8). Needs more bake time before it matches Windows (self-test still hits a late SIGSEGV on some shell cases).
 
-- Workflow stub: [`.github/workflows/release.yml`](.github/workflows/release.yml) (all jobs `if: false` until Qt/OCCT caches and Unix CMake land)
-- Packaging stubs: `scripts/package-macos.sh`, `scripts/package-linux.sh`
+### 1. Qt 6.8 + WebEngine
 
-Until CMake gains portable OCCT discovery, `MACOSX_BUNDLE` / `macdeployqt`, and Linux `linuxdeploy`, only the Windows zip above is a supported distributeable.
+```sh
+pip install aqtinstall
+aqt install-qt linux desktop 6.8.2 linux_gcc_64 -O /opt/Qt -m qtwebengine qtwebchannel qtpositioning
+```
+
+### 2. System packages
+
+```sh
+sudo apt install build-essential cmake ninja-build git pkg-config \
+  libgl1-mesa-dev libglu1-mesa-dev libxkbcommon-dev libxcb-cursor0 \
+  libfontconfig1-dev libfreetype-dev libtbb-dev xvfb \
+  libocct-foundation-dev libocct-modeling-data-dev libocct-modeling-algorithms-dev \
+  libocct-data-exchange-dev libocct-ocaf-dev libocct-visualization-dev occt-misc
+```
+
+### 3. Configure, build, package
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.2/gcc_64
+cmake --build build --target Fission360 -j"$(nproc)"
+CMAKE_PREFIX_PATH=/opt/Qt/6.8.2/gcc_64 bash scripts/package-linux.sh build
+```
+
+That writes `dist/Fission360-<version>-linux-x64.tar.gz` (AppDir + bundled aqt Qt libs). The host still needs system **libocct** and a normal OpenGL/X11 stack. Headless check: `xvfb-run -a ./build/Fission360 --selftest`.
+
+### macOS
+
+**No release builds yet.** Sketch: [`docs/ci-release-sketch.md`](docs/ci-release-sketch.md), stub `scripts/package-macos.sh`. CI workflow stub: [`.github/workflows/release.yml`](.github/workflows/release.yml) (jobs still gated).
 
 ## Import from the Exporter add-in
 
@@ -103,7 +130,7 @@ Designs that insert other designs keep that link. Export each folder into the ma
 
 ## Roadmap status
 
-Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.45**. Latest GitHub release: **1.13.45** (`Fission360-1.13.45-windows-x64.zip`). Up next: real CAM toolpaths and optional lock/sync.
+Solid / sketch / mesh / sheet-metal features, inspection, drawings, rendering, parametric timeline, undo/redo, version history (inside the `.f360`), autosave, **Send to Slicer**, startup update check, **Report Bug**, and a headless **MCP** server (`Fission360 --mcp`) are in. Current source: **1.13.45**. Latest GitHub release: **[v1.13.45](https://github.com/xboxhacker/fission360/releases/tag/v1.13.45)** — Windows `Fission360-1.13.45-windows-x64.zip` and experimental Linux `Fission360-1.13.45-linux-x64.tar.gz`. Up next: real CAM toolpaths and optional lock/sync.
 
 MCP / command registry notes: [`docs/mcp.md`](docs/mcp.md). Peer ideas (oracle tests, installers, …) — **not** their source: [`docs/peer-inspiration.md`](docs/peer-inspiration.md). SolidCraft issue recipes: [`docs/solidcraft-issue-parity.md`](docs/solidcraft-issue-parity.md).
 
